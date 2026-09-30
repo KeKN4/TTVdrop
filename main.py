@@ -1,5 +1,6 @@
 import os
 import sys
+import pickle
 import traceback
 import threading
 from aiohttp import web
@@ -56,6 +57,23 @@ HTML_PAGE = """
 </html>
 """
 
+def save_cookie_file(username, auth_token):
+    os.makedirs("cookies", exist_ok=True)
+    cookie_path = os.path.join("cookies", f"{username}.pkl")
+    cookie_data = [
+        {
+            "name": "auth-token",
+            "value": auth_token,
+            "domain": ".twitch.tv",
+            "path": "/",
+            "secure": True,
+            "httpOnly": False
+        }
+    ]
+    with open(cookie_path, "wb") as f:
+        pickle.dump(cookie_data, f)
+    print(f"[SYSTEM] Файл кук сохранен: {cookie_path}", flush=True)
+
 def worker(username, auth_token, streamers):
     global status
     status["running"] = True
@@ -63,13 +81,14 @@ def worker(username, auth_token, streamers):
     status["streamers"] = streamers
     status["last_error"] = None
 
-    print(f"[MINER] Запуск для пользователя: {username}, каналы: {streamers}", flush=True)
+    print(f"[MINER] Подготовка сессии для: {username}...", flush=True)
 
     try:
-        miner = TwitchChannelPointsMiner(
-            username=username,
-            auth_token=auth_token
-        )
+        # 1. Записываем файл сессии с токеном
+        save_cookie_file(username, auth_token)
+
+        # 2. Инициализируем майнер только с username (он сам заберет файл из cookies/)
+        miner = TwitchChannelPointsMiner(username=username)
         print("[MINER] Инициализация прошла успешно, начинаем mine()...", flush=True)
         miner.mine(streamers)
     except Exception as err:
@@ -100,13 +119,13 @@ async def handle_post(request):
     streamers_raw = data.get("streamers", "")
     streamers = [s.strip() for s in streamers_raw.split(",") if s.strip()]
 
-    print(f"[WEB] Получен POST: user={username}, token_len={len(auth_token)}, streamers={streamers}", flush=True)
+    print(f"[WEB] Получен POST: user={username}, streamers={streamers}", flush=True)
 
     if username and auth_token and streamers:
         miner_thread = threading.Thread(target=worker, args=(username, auth_token, streamers), daemon=True)
         miner_thread.start()
     else:
-        print("[WEB] Одно из полей оказалось пустым!", flush=True)
+        print("[WEB] Пустые поля формы!", flush=True)
 
     return web.HTTPFound("/")
 
@@ -116,5 +135,5 @@ app.router.add_post("/start", handle_post)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    print(f"[SYSTEM] Сервер слушает порт {port}", flush=True)
+    print(f"[SYSTEM] Сервер запущен на порту {port}", flush=True)
     web.run_app(app, host="0.0.0.0", port=port)
