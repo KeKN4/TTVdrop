@@ -4,8 +4,6 @@ import traceback
 import threading
 from aiohttp import web
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
-from TwitchChannelPointsMiner.classes.Chat import ChatPresence
-from TwitchChannelPointsMiner.classes.Settings import Settings
 
 miner_thread = None
 status = {
@@ -68,13 +66,9 @@ def worker(username, auth_token, streamers):
     print(f"[MINER] Запуск для пользователя: {username}, каналы: {streamers}", flush=True)
 
     try:
-        settings = Settings()
-        settings.chat = ChatPresence.ONLINE
-
         miner = TwitchChannelPointsMiner(
             username=username,
-            auth_token=auth_token,
-            settings=settings
+            auth_token=auth_token
         )
         print("[MINER] Инициализация прошла успешно, начинаем mine()...", flush=True)
         miner.mine(streamers)
