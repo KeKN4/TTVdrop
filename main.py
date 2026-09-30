@@ -5,7 +5,7 @@ import threading
 from aiohttp import web
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
-from TwitchChannelPointsMiner.classes.Settings import Settings, Priority
+from TwitchChannelPointsMiner.classes.Settings import Settings
 
 miner_thread = None
 status = {
@@ -64,7 +64,7 @@ def worker(username, auth_token, streamers):
     status["username"] = username
     status["streamers"] = streamers
     status["last_error"] = None
-    
+
     print(f"[MINER] Запуск для пользователя: {username}, каналы: {streamers}", flush=True)
 
     try:
@@ -72,8 +72,7 @@ def worker(username, auth_token, streamers):
             username=username,
             auth_token=auth_token,
             settings=Settings(
-                chat=ChatPresence.ONLINE,
-                priority=[Priority.STREAMS, Priority.POINTS]
+                chat=ChatPresence.ONLINE
             )
         )
         print("[MINER] Инициализация прошла успешно, начинаем mine()...", flush=True)
@@ -90,7 +89,7 @@ async def handle_get(request):
     is_on = status["running"]
     err = status["last_error"]
     err_html = f'<div class="error-box"><b>Ошибка:</b> {err}</div>' if err else ''
-    
+
     rendered = HTML_PAGE.replace("{status_class}", "on" if is_on else "off") \
                         .replace("{status_text}", "Работает" if is_on else "Остановлен") \
                         .replace("{error_html}", err_html) \
