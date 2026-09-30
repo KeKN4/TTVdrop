@@ -1,12 +1,16 @@
 import os
 import sys
 import pickle
+import queue
 import traceback
 import threading
+import asyncio
 from aiohttp import web
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
 
-miner_thread = None
+# Очередь для передачи команды на старт из веб-потока в главный поток
+task_queue = queue.Queue()
+
 status = {
     "running": False,
     "username": "",
@@ -50,7 +54,7 @@ HTML_PAGE = """
             <label>Стримеры (через запятую):</label>
             <textarea name="streamers" rows="3" placeholder="streamer1, streamer2" required>{streamers}</textarea>
 
-            <button type="submit">Запустить / Перезапустить</button>
+            <button type="submit">Запустить фарм</button>
         </form>
     </div>
 </body>
@@ -72,32 +76,7 @@ def save_cookie_file(username, auth_token):
     ]
     with open(cookie_path, "wb") as f:
         pickle.dump(cookie_data, f)
-    print(f"[SYSTEM] Файл кук сохранен: {cookie_path}", flush=True)
-
-def worker(username, auth_token, streamers):
-    global status
-    status["running"] = True
-    status["username"] = username
-    status["streamers"] = streamers
-    status["last_error"] = None
-
-    print(f"[MINER] Подготовка сессии для: {username}...", flush=True)
-
-    try:
-        # 1. Записываем файл сессии с токеном
-        save_cookie_file(username, auth_token)
-
-        # 2. Инициализируем майнер только с username (он сам заберет файл из cookies/)
-        miner = TwitchChannelPointsMiner(username=username)
-        print("[MINER] Инициализация прошла успешно, начинаем mine()...", flush=True)
-        miner.mine(streamers)
-    except Exception as err:
-        err_msg = traceback.format_exc()
-        print(f"[MINER ERROR]\n{err_msg}", flush=True)
-        status["last_error"] = str(err)
-    finally:
-        status["running"] = False
-        print("[MINER] Поток завершил работу", flush=True)
+    print(f"[SYSTEM] Сессия записана: {cookie_path}", flush=True)
 
 async def handle_get(request):
     is_on = status["running"]
@@ -112,28 +91,63 @@ async def handle_get(request):
     return web.Response(text=rendered, content_type="text/html")
 
 async def handle_post(request):
-    global miner_thread
     data = await request.post()
     username = data.get("username", "").strip()
     auth_token = data.get("auth_token", "").strip()
     streamers_raw = data.get("streamers", "")
     streamers = [s.strip() for s in streamers_raw.split(",") if s.strip()]
 
-    print(f"[WEB] Получен POST: user={username}, streamers={streamers}", flush=True)
+    print(f"[WEB] Запрос на запуск: user={username}, streamers={streamers}", flush=True)
 
     if username and auth_token and streamers:
-        miner_thread = threading.Thread(target=worker, args=(username, auth_token, streamers), daemon=True)
-        miner_thread.start()
+        # Передаем задачу в главный поток
+        task_queue.put((username, auth_token, streamers))
     else:
-        print("[WEB] Пустые поля формы!", flush=True)
+        print("[WEB] Заполнены не все поля!", flush=True)
 
     return web.HTTPFound("/")
 
-app = web.Application()
-app.router.add_get("/", handle_get)
-app.router.add_post("/start", handle_post)
+def run_web_server():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    app = web.Application()
+    app.router.add_get("/", handle_get)
+    app.router.add_post("/start", handle_post)
+    port = int(os.environ.get("PORT", 10000))
+    print(f"[WEB SERVER] Запущен на порту {port}", flush=True)
+    runner = web.AppRunner(app)
+    loop.run_until_complete(runner.setup())
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    loop.run_until_complete(site.start())
+    loop.run_forever()
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    print(f"[SYSTEM] Сервер запущен на порту {port}", flush=True)
-    web.run_app(app, host="0.0.0.0", port=port)
+    # Веб-сервер запускаем в фоне
+    server_thread = threading.Thread(target=run_web_server, daemon=True)
+    server_thread.start()
+
+    print("[MAIN] Ожидание команды на запуск через веб-панель...", flush=True)
+
+    # Главный поток держит майнер, чтобы не конфликтовать с сигналами ОС
+    while True:
+        try:
+            username, auth_token, streamers = task_queue.get()
+            status["running"] = True
+            status["username"] = username
+            status["streamers"] = streamers
+            status["last_error"] = None
+
+            print(f"[MAIN] Инициализация сессии для {username}...", flush=True)
+            save_cookie_file(username, auth_token)
+
+            miner = TwitchChannelPointsMiner(username=username)
+            print(f"[MAIN] Майнер стартовал для каналов: {streamers}", flush=True)
+            miner.mine(streamers)
+
+        except Exception as err:
+            err_msg = traceback.format_exc()
+            print(f"[MAIN ERROR]\n{err_msg}", flush=True)
+            status["last_error"] = str(err)
+        finally:
+            status["running"] = False
+            print("[MAIN] Майнер завершил цикл", flush=True)
