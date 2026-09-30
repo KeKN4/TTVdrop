@@ -1,2 +1,2 @@
-TwitchChannelPointsMiner
+git+https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2.git
 aiohttp
