@@ -1,2 +1,6 @@
 git+https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2.git
 aiohttp
+validators
+colorama
+requests
+websocket-client
