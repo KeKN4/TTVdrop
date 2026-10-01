@@ -2,140 +2,344 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Steam Monitor / Twitch Miner</title>
+    <title>Steam Monitor — TTV Dropper</title>
     <style>
+        :root {
+            --steam-bg: #4c5844;
+            --steam-dark: #3a4334;
+            --steam-darker: #282e24;
+            --steam-light: #5e6d54;
+            --steam-border-hi: #6d7f62;
+            --steam-border-lo: #272d22;
+            --steam-text: #c4cebe;
+            --steam-text-bright: #e1e9db;
+            --steam-text-muted: #8d9885;
+            --steam-accent: #a3b899;
+            --steam-green: #68b248;
+            --steam-red: #c95252;
+        }
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+        }
+
         body {
-            background-color: #2b3925;
-            color: #d1d7bd;
-            font-family: Tahoma, Arial, sans-serif;
-            font-size: 11px;
+            font-family: "Tahoma", "Segoe UI", Arial, sans-serif;
+            background-color: #1f231c;
+            color: var(--steam-text);
             margin: 0;
-            padding: 10px;
+            padding: 24px;
+            font-size: 11px;
         }
-        .window {
-            background: #3c4d33;
-            border: 2px solid #556b47;
-            border-top: 2px solid #6b855c;
-            border-left: 2px solid #6b855c;
-            width: 750px;
-            margin: 20px auto;
-            box-shadow: 3px 3px 10px rgba(0,0,0,0.6);
+
+        /* Окно классического Steam v1.0 */
+        .steam-window {
+            max-width: 760px;
+            margin: 0 auto;
+            background-color: var(--steam-bg);
+            border: 1px solid var(--steam-border-hi);
+            box-shadow: 2px 2px 0px var(--steam-border-lo), inset 1px 1px 0px var(--steam-light);
+            padding: 2px;
         }
+
+        /* Заголовок окна */
         .title-bar {
-            background: linear-gradient(to bottom, #5d784e 0%, #3c4d33 100%);
-            color: #ffffff;
-            padding: 4px 8px;
+            background: linear-gradient(to right, #434e3c, #3a4434);
+            padding: 5px 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--steam-border-lo);
+        }
+
+        .title-bar .title {
+            color: var(--steam-text-bright);
             font-weight: bold;
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            border-bottom: 1px solid #232d1e;
+            gap: 6px;
+            letter-spacing: 0.5px;
         }
-        .content {
+
+        .window-controls {
+            display: flex;
+            gap: 2px;
+        }
+
+        .win-btn {
+            width: 14px;
+            height: 14px;
+            background: var(--steam-bg);
+            border: 1px solid var(--steam-border-hi);
+            border-right-color: var(--steam-border-lo);
+            border-bottom-color: var(--steam-border-lo);
+            color: var(--steam-text);
+            font-size: 9px;
+            line-height: 11px;
+            text-align: center;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .win-btn:hover {
+            color: #fff;
+            background: var(--steam-light);
+        }
+
+        /* Меню навигации */
+        .menu-bar {
+            display: flex;
+            gap: 16px;
+            padding: 6px 12px;
+            background-color: var(--steam-dark);
+            border-bottom: 1px solid var(--steam-border-lo);
+            color: var(--steam-text-muted);
+            font-size: 11px;
+        }
+
+        .menu-item {
+            cursor: pointer;
+            color: var(--steam-text-muted);
+            text-decoration: none;
+        }
+        .menu-item.active {
+            color: var(--steam-text-bright);
+            text-decoration: underline;
+        }
+        .menu-item:hover {
+            color: var(--steam-text-bright);
+        }
+
+        .content-area {
             padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
         }
-        .panel {
-            background: #232d1e;
-            border: 1px solid #1a2216;
-            padding: 10px;
+
+        /* Группбоксы / панели */
+        .group-box {
+            background-color: var(--steam-dark);
+            border: 1px solid var(--steam-border-lo);
+            box-shadow: inset 1px 1px 0px var(--steam-border-lo), 1px 1px 0px var(--steam-light);
+            padding: 14px;
+            position: relative;
+        }
+
+        .group-title {
+            color: var(--steam-text-bright);
+            font-size: 11px;
+            font-weight: bold;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #4a5643;
+            padding-bottom: 4px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* Формы и поля ввода */
+        .form-row {
             margin-bottom: 10px;
         }
+
+        label {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--steam-text);
+            font-size: 11px;
+        }
+
         input[type="text"] {
-            background: #1a2216;
-            border: 1px solid #4a613d;
-            color: #d1d7bd;
-            padding: 4px;
-            font-family: Tahoma, Arial, sans-serif;
+            width: 100%;
+            background-color: var(--steam-darker);
+            border: 1px solid var(--steam-border-lo);
+            box-shadow: inset 1px 1px 2px #000;
+            color: #fff;
+            padding: 6px 8px;
+            font-family: inherit;
             font-size: 11px;
+            outline: none;
         }
-        button {
-            background: linear-gradient(to bottom, #4a613d 0%, #2f3e26 100%);
-            border: 1px solid #6b855c;
-            color: #ffffff;
-            padding: 4px 12px;
-            font-family: Tahoma, Arial, sans-serif;
+
+        input[type="text"]:focus {
+            border-color: var(--steam-accent);
+        }
+
+        /* Кнопки классического Steam */
+        .steam-btn {
+            background-color: var(--steam-bg);
+            border-top: 1px solid var(--steam-border-hi);
+            border-left: 1px solid var(--steam-border-hi);
+            border-right: 1px solid var(--steam-border-lo);
+            border-bottom: 1px solid var(--steam-border-lo);
+            color: var(--steam-text-bright);
+            padding: 5px 16px;
+            font-family: inherit;
             font-size: 11px;
+            font-weight: bold;
             cursor: pointer;
+            outline: none;
+            box-shadow: 1px 1px 0px #000;
         }
-        button:hover {
-            background: linear-gradient(to bottom, #567347 0%, #36492c 100%);
+
+        .steam-btn:hover {
+            background-color: var(--steam-light);
+            color: #fff;
         }
-        .btn-danger {
-            background: linear-gradient(to bottom, #7a3a3a 0%, #472121 100%);
-            border: 1px solid #a85252;
+
+        .steam-btn:active {
+            border-top: 1px solid var(--steam-border-lo);
+            border-left: 1px solid var(--steam-border-lo);
+            border-right: 1px solid var(--steam-border-hi);
+            border-bottom: 1px solid var(--steam-border-hi);
+            padding: 6px 15px 4px 17px;
         }
-        .btn-danger:hover {
-            background: linear-gradient(to bottom, #944444 0%, #5e2b2b 100%);
+
+        .steam-btn.danger {
+            background-color: #553434;
+            border-color: #7b4c4c #2b1717 #2b1717 #7b4c4c;
         }
-        .channel-row {
+        .steam-btn.danger:hover {
+            background-color: #6b4040;
+        }
+
+        /* Список стримеров */
+        .streamers-list {
+            background-color: var(--steam-darker);
+            border: 1px solid var(--steam-border-lo);
+            max-height: 230px;
+            overflow-y: auto;
+            padding: 4px;
+        }
+
+        .streamer-row {
             display: flex;
             align-items: center;
-            padding: 4px 0;
-            border-bottom: 1px dashed #33422b;
+            padding: 4px 6px;
+            border-bottom: 1px solid #333a2e;
             gap: 10px;
         }
-        .channel-row img {
+
+        .streamer-row:last-child {
+            border-bottom: none;
+        }
+
+        .streamer-row img {
             width: 24px;
             height: 24px;
             border-radius: 50%;
-            border: 1px solid #556b47;
+            border: 1px solid var(--steam-border-hi);
+            background: #111;
         }
-        a {
-            color: #92b579;
-            text-decoration: none;
+
+        .streamer-name {
+            flex: 1;
+            color: var(--steam-text-bright);
+            font-weight: bold;
         }
-        a:hover {
-            text-decoration: underline;
+
+        .status-badge {
+            color: var(--steam-green);
+            font-weight: bold;
+        }
+
+        /* Нижний статус-бар */
+        .status-bar {
+            background-color: var(--steam-dark);
+            padding: 4px 8px;
+            font-size: 10px;
+            color: var(--steam-text-muted);
+            border-top: 1px solid var(--steam-border-lo);
+            display: flex;
+            justify-content: space-between;
         }
     </style>
 </head>
 <body>
-    <div class="window">
+
+    <div class="steam-window">
+        <!-- Шапка окна -->
         <div class="title-bar">
-            <span>Steam Monitor - Twitch Points Miner [{{ display_name }}]</span>
-            <a href="/logout" style="color: #ff9999;">log out</a>
+            <div class="title">
+                <span>[Steam v1.0] Twitch Points Farm Monitor — {{ display_name }} (@{{ username }})</span>
+            </div>
+            <div class="window-controls">
+                <div class="win-btn">_</div>
+                <div class="win-btn">□</div>
+                <a href="/logout" class="win-btn" title="Выйти">✕</a>
+            </div>
         </div>
-        <div class="content">
+
+        <!-- Меню навигации -->
+        <div class="menu-bar">
+            <span class="menu-item active">Monitor</span>
+            <span class="menu-item">Active Channels</span>
+            <span class="menu-item">Settings</span>
+            <a href="/logout" class="menu-item" style="margin-left: auto; color: #ff9999;">[ Log Out ]</a>
+        </div>
+
+        <div class="content-area">
             
-            <div class="panel">
-                <b>Статус фарминга:</b> <span style="color: #a3d977;">{{ status }}</span>
-                {% if is_running %}
-                <form action="/stop_miner" method="POST" style="display:inline; margin-left: 15px;">
-                    <button type="submit" class="btn-danger">Остановить</button>
-                </form>
-                {% endif %}
-            </div>
-
-            <div class="panel">
-                <b>Добавить канал вручную:</b>
-                <form action="/add_channel" method="POST" style="margin-top: 5px; display: flex; gap: 5px;">
-                    <input type="text" name="new_channel" placeholder="например: shroud" style="flex:1;" required>
-                    <button type="submit">Добавить</button>
-                </form>
-            </div>
-
-            <div class="panel">
-                <b>Список каналов для фарма:</b>
-                <form action="/start_miner" method="POST">
-                    <div style="max-height: 200px; overflow-y: auto; margin: 8px 0; padding-right: 5px;">
-                        {% if streamers %}
-                            {% for s in streamers %}
-                            <div class="channel-row">
-                                <input type="checkbox" name="channels" value="{{ s.login }}" id="ch_{{ s.login }}" {% if s.login in selected_channels %}checked{% endif %}>
-                                <img src="{{ s.avatar }}" alt="">
-                                <label for="ch_{{ s.login }}" style="flex:1; cursor:pointer;"><b>{{ s.name }}</b></label>
-                                <button type="submit" formaction="/remove_channel" name="channel" value="{{ s.login }}" class="btn-danger" style="padding: 2px 6px;">Удалить</button>
-                            </div>
-                            {% endfor %}
+            <!-- Панель статуса майнера -->
+            <div class="group-box">
+                <div class="group-title">Miner State & Actions</div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        Current Mining State: <span class="status-badge">{{ status }}</span>
+                    </div>
+                    <div>
+                        {% if is_running %}
+                        <form action="/stop_miner" method="POST" style="margin: 0; display: inline;">
+                            <button type="submit" class="steam-btn danger">Stop Mining Process</button>
+                        </form>
                         {% else %}
-                            <div style="color: #888; text-align: center; padding: 10px;">Каналы не добавлены. Введите ник выше.</div>
+                        <form action="/start_miner" method="POST" style="margin: 0; display: inline;">
+                            <button type="submit" class="steam-btn">Connect & Start Mining</button>
+                        </form>
                         {% endif %}
                     </div>
-                    <button type="submit" style="width: 100%; padding: 6px; font-weight: bold; background: linear-gradient(to bottom, #557a3d 0%, #314723 100%);">Сохранить и запустить фарминг</button>
+                </div>
+            </div>
+
+            <!-- Добавление каналов -->
+            <div class="group-box">
+                <div class="group-title">Target Channels Configuration</div>
+                <form action="/add_channel" method="POST" style="display: flex; gap: 8px; margin-bottom: 12px;">
+                    <input type="text" name="new_channel" placeholder="Enter Twitch username (e.g. shroud, gaules, silvername)" required autocomplete="off">
+                    <button type="submit" class="steam-btn" style="white-space: nowrap;">Add Channel</button>
                 </form>
+
+                <!-- Список добавленных каналов с аватарками -->
+                <div class="streamers-list">
+                    {% if streamers %}
+                        {% for s in streamers %}
+                        <div class="streamer-row">
+                            <img src="{{ s.avatar }}" alt="Avatar" onerror="this.src='https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png'">
+                            <span class="streamer-name">{{ s.name }}</span>
+                            <form action="/remove_channel" method="POST" style="margin: 0;">
+                                <input type="hidden" name="channel" value="{{ s.login }}">
+                                <button type="submit" class="steam-btn danger" style="padding: 2px 8px; font-size: 10px;">Remove</button>
+                            </form>
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                        <div style="text-align: center; color: var(--steam-text-muted); padding: 24px;">
+                            No target channels added. Enter a Twitch login above to start farming.
+                        </div>
+                    {% endif %}
+                </div>
             </div>
 
         </div>
+
+        <!-- Нижний статус-бар -->
+        <div class="status-bar">
+            <span>Server: 127.0.0.1:10000 (Operational)</span>
+            <span>Target Channels: {{ streamers|length }}</span>
+        </div>
     </div>
+
 </body>
 </html>
