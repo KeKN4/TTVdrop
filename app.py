@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import secrets
 import sqlite3
 import threading
@@ -63,214 +64,118 @@ def verify_twitch_token(token: str):
         print(f"[AUTH ERROR] {e}")
     return None, None, None
 
-# Автоматическое определение полей подписок через интроспекцию и выгрузка каналов
+# Пошаговое получение списка отслеживаемых стримеров с полным логированием
 def get_user_follows_full(login: str, token: str):
     if not token:
+        print("[STEP 0] Ошибка: Токен отсутствует!")
         return []
 
+    print("\n" + "="*50)
+    print(f"[STEP 1] Начало загрузки подписок для @{login}")
+    print(f"[STEP 1] Токен (превью): {token[:6]}...{token[-4:]}")
+    
     session = requests.Session()
     session.cookies.set("auth-token", token, domain=".twitch.tv")
+    session.cookies.set("auth-token", token)
 
     headers = {
         "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
         "Authorization": f"OAuth {token}",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "*/*",
-        "Content-Type": "application/json",
-        "X-Device-Id": secrets.token_hex(16),
-        "Client-Session-Id": secrets.token_hex(16)
+        "Accept-Language": "en-US",
+        "Client-Session-Id": secrets.token_hex(16),
+        "X-Device-Id": secrets.token_hex(16)
     }
 
     streamers = {}
 
-    # 1. Интроспекция GraphQL схемы Twitch
-    cu_fields = []
-    u_fields = []
-    try:
-        intro_query = """
-        query {
-          currentUserType: __type(name: "CurrentUser") {
-            fields { name }
-          }
-          userType: __type(name: "User") {
-            fields { name }
+    # --- ШАГ 2: Запрос к официальному мобильному GQL (онлайн-каналы из FollowedLiveUsers) ---
+    print("--> [STEP 2] Запрос списка стримов через GraphQL...")
+    gql_query = """
+    query {
+      currentUser {
+        id
+        followedLiveUsers {
+          nodes {
+            login
+            displayName
+            profileImageURL(width: 70)
           }
         }
-        """
-        r_intro = session.post("https://gql.twitch.tv/gql", json={"query": intro_query}, headers=headers, timeout=8)
-        if r_intro.status_code == 200:
-            data_intro = r_intro.json().get("data") or {}
-            cu_fields = [f["name"] for f in ((data_intro.get("currentUserType") or {}).get("fields") or [])]
-            u_fields = [f["name"] for f in ((data_intro.get("userType") or {}).get("fields") or [])]
-            print(f"[INTROSPECTION] CurrentUser follow fields: {[f for f in cu_fields if 'follow' in f.lower() or 'live' in f.lower()]}")
-            print(f"[INTROSPECTION] User follow fields: {[f for f in u_fields if 'follow' in f.lower()]}")
+      }
+    }
+    """
+    try:
+        r_gql = session.post("https://gql.twitch.tv/gql", json={"query": gql_query}, headers=headers, timeout=8)
+        print(f"    GQL Status: {r_gql.status_code}")
+        
+        with open("debug_gql.json", "w", encoding="utf-8") as f:
+            f.write(r_gql.text)
+        print("    [ДАМП] Ответ GraphQL сохранен в debug_gql.json")
+
+        if r_gql.status_code == 200:
+            res_j = r_gql.json()
+            data = res_j.get("data") or {}
+            c_user = data.get("currentUser") or {}
+            nodes = (c_user.get("followedLiveUsers") or {}).get("nodes") or []
+            print(f"    Найдено активных стримеров в GQL: {len(nodes)}")
+            for n in nodes:
+                if n and n.get("login"):
+                    ch_log = n["login"]
+                    streamers[ch_log] = {
+                        "login": ch_log,
+                        "name": n.get("displayName") or ch_log,
+                        "avatar": n.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
+                        "is_live": True
+                    }
+        else:
+            print(f"    [!] Ошибка GQL запроса: {r_gql.text[:200]}")
     except Exception as e:
-        print(f"[INTROSPECTION ERROR] {e}")
+        print(f"    [!] Исключение при GQL запросе: {e}")
 
-    # 2. Активные онлайн-стримеры (если поле доступно в схеме)
-    if "followedLiveUsers" in cu_fields:
-        try:
-            q_live = """
-            query {
-              currentUser {
-                followedLiveUsers {
-                  nodes {
-                    login
-                    displayName
-                    profileImageURL(width: 70)
-                  }
+    # --- ШАГ 3: Запрос HTML веб-страницы отслеживаемых каналов ---
+    print("--> [STEP 3] Запрос страницы www.twitch.tv/directory/following/channels...")
+    try:
+        page_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9"
+        }
+        r_page = session.get("https://www.twitch.tv/directory/following/channels", headers=page_headers, timeout=10)
+        print(f"    Page Status: {r_page.status_code}")
+        print(f"    Final URL: {r_page.url}")
+        print(f"    Длина HTML: {len(r_page.text)} символов")
+
+        with open("debug_page.html", "w", encoding="utf-8") as f:
+            f.write(r_page.text)
+        print("    [ДАМП] HTML страницы сохранен в debug_page.html")
+
+        # --- ШАГ 4: Поиск каналов в структурированном кэше (Apollo / Next.js Data) ---
+        print("--> [STEP 4] Поиск данных стримеров в HTML...")
+        matches_user = re.findall(r'\{[^{}]*"__typename":"User"[^{}]*"login":"([a-zA-Z0-9_]+)"[^{}]*"displayName":"([^"]+)"', r_page.text)
+        print(f"    Найдено совпадений User в теле HTML: {len(matches_user)}")
+        
+        for m_login, m_name in matches_user:
+            m_login_clean = m_login.lower()
+            if m_login_clean != login.lower() and m_login_clean not in streamers:
+                # Ищем аватарку рядом с логином
+                avatar_match = re.search(r'profileImageURL":"([^"]+)"', r_page.text[r_page.text.find(m_login):r_page.text.find(m_login)+300])
+                avatar = avatar_match.group(1) if avatar_match else "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png"
+                
+                streamers[m_login_clean] = {
+                    "login": m_login_clean,
+                    "name": m_name,
+                    "avatar": avatar,
+                    "is_live": False
                 }
-              }
-            }
-            """
-            r_live = session.post("https://gql.twitch.tv/gql", json={"query": q_live}, headers=headers, timeout=8)
-            print(f"[LIVE GQL] Status: {r_live.status_code}, Snippet: {r_live.text[:200]}")
-            if r_live.status_code == 200:
-                nodes = (((r_live.json().get("data") or {}).get("currentUser") or {}).get("followedLiveUsers") or {}).get("nodes") or []
-                for n in nodes:
-                    if n and n.get("login"):
-                        streamers[n["login"]] = {
-                            "login": n["login"],
-                            "name": n.get("displayName") or n["login"],
-                            "avatar": n.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
-                            "is_live": True
-                        }
-        except Exception as e:
-            print(f"[LIVE GQL ERROR] {e}")
-
-    # 3. Полный список подписок через CurrentUser
-    for f_name in ["followedUsers", "follows", "following"]:
-        if f_name in cu_fields:
-            for field_type in ["edges", "nodes"]:
-                try:
-                    if field_type == "edges":
-                        q_f = f"""
-                        query {{
-                          currentUser {{
-                            {f_name}(first: 100) {{
-                              edges {{
-                                node {{
-                                  login
-                                  displayName
-                                  profileImageURL(width: 70)
-                                }}
-                              }}
-                            }}
-                          }}
-                        }}
-                        """
-                    else:
-                        q_f = f"""
-                        query {{
-                          currentUser {{
-                            {f_name}(first: 100) {{
-                              nodes {{
-                                login
-                                displayName
-                                profileImageURL(width: 70)
-                              }}
-                            }}
-                          }}
-                        }}
-                        """
-                    r_f = session.post("https://gql.twitch.tv/gql", json={"query": q_f}, headers=headers, timeout=8)
-                    print(f"[CU {f_name} {field_type}] Status: {r_f.status_code}, Snippet: {r_f.text[:200]}")
-                    if r_f.status_code == 200:
-                        f_obj = (((r_f.json().get("data") or {}).get("currentUser") or {}).get(f_name)) or {}
-                        items = [e["node"] for e in f_obj.get("edges", []) if e.get("node")] if field_type == "edges" else f_obj.get("nodes", [])
-                        for it in items:
-                            if it and it.get("login"):
-                                log = it["login"]
-                                if log not in streamers:
-                                    streamers[log] = {
-                                        "login": log,
-                                        "name": it.get("displayName") or log,
-                                        "avatar": it.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
-                                        "is_live": False
-                                    }
-                        if items:
-                            break
-                except Exception as e:
-                    print(f"[CU {f_name} ERROR] {e}")
-
-    # 4. Проверка публичных подписок User(login)
-    if not streamers:
-        for f_name in ["follows", "followedUsers", "following"]:
-            if f_name in u_fields:
-                for field_type in ["edges", "nodes"]:
-                    try:
-                        if field_type == "edges":
-                            q_u = f"""
-                            query($login: String!) {{
-                              user(login: $login) {{
-                                {f_name}(first: 100) {{
-                                  edges {{
-                                    node {{
-                                      login
-                                      displayName
-                                      profileImageURL(width: 70)
-                                    }}
-                                  }}
-                                }}
-                              }}
-                            }}
-                            """
-                        else:
-                            q_u = f"""
-                            query($login: String!) {{
-                              user(login: $login) {{
-                                {f_name}(first: 100) {{
-                                  nodes {{
-                                    login
-                                    displayName
-                                    profileImageURL(width: 70)
-                                  }}
-                                }}
-                              }}
-                            }}
-                            """
-                        r_u = session.post("https://gql.twitch.tv/gql", json={"query": q_u, "variables": {"login": login}}, headers=headers, timeout=8)
-                        print(f"[USER {f_name} {field_type}] Status: {r_u.status_code}, Snippet: {r_u.text[:200]}")
-                        if r_u.status_code == 200:
-                            f_obj = (((r_u.json().get("data") or {}).get("user") or {}).get(f_name)) or {}
-                            items = [e["node"] for e in f_obj.get("edges", []) if e.get("node")] if field_type == "edges" else f_obj.get("nodes", [])
-                            for it in items:
-                                if it and it.get("login"):
-                                    log = it["login"]
-                                    if log not in streamers:
-                                        streamers[log] = {
-                                            "login": log,
-                                            "name": it.get("displayName") or log,
-                                            "avatar": it.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
-                                            "is_live": False
-                                        }
-                            if items:
-                                break
-                    except Exception as e:
-                        print(f"[USER {f_name} ERROR] {e}")
-
-    # 5. Fallback: парсинг кэша веб-страницы подписок
-    if not streamers:
-        try:
-            r_page = session.get("https://www.twitch.tv/directory/following/channels", headers=headers, timeout=10)
-            print(f"[PAGE FOLLOWS] Status: {r_page.status_code}")
-            if r_page.status_code == 200:
-                matches = re.findall(r'\{"__typename":"User","id":"\d+","login":"([a-zA-Z0-9_]+)","displayName":"([^"]+)".*?"profileImageURL":"([^"]+)"', r_page.text)
-                for m_login, m_name, m_avatar in matches:
-                    if m_login.lower() != login.lower() and m_login not in streamers:
-                        streamers[m_login] = {
-                            "login": m_login,
-                            "name": m_name,
-                            "avatar": m_avatar,
-                            "is_live": False
-                        }
-                print(f"[PAGE REGEX MATCHES] Found: {len(streamers)}")
-        except Exception as e:
-            print(f"[PAGE PARSE ERROR] {e}")
+    except Exception as e:
+        print(f"    [!] Исключение при парсинге HTML: {e}")
 
     res = list(streamers.values())
     res.sort(key=lambda x: (not x["is_live"], x["name"].lower()))
-    print(f"[TOTAL LOADED STREAMERS] Итого найдено: {len(res)}")
+    print(f"--> [ИТОГ] Собрано каналов: {len(res)}")
+    print("="*50 + "\n")
     return res
 
 # Фоновый поток майнера
@@ -380,7 +285,7 @@ async def dashboard(request: Request):
 
     followed_streamers = get_user_follows_full(user, auth_token)
 
-    # Сохраняем стримеров, которые уже были выбраны ранее
+    # Сохраняем стримеров, которые уже были выбраны ранее в БД
     followed_logins = {s["login"] for s in followed_streamers}
     for s_saved in saved_streamers:
         if s_saved and s_saved not in followed_logins:
