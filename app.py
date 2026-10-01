@@ -50,7 +50,7 @@ def verify_twitch_token(token: str):
     }
     payload = {"query": "query { currentUser { id login displayName profileImageURL(width: 70) } }"}
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=7)
+        resp = requests.post(url, json=payload, headers=headers, timeout=6)
         if resp.status_code == 200:
             res_json = resp.json()
             if isinstance(res_json, dict):
@@ -61,20 +61,54 @@ def verify_twitch_token(token: str):
         print(f"[AUTH ERROR] {e}")
     return None, None, None
 
-def get_channel_avatar(channel_login: str):
+# Быстрое пакетное получение аватарок через GraphQL без лагов
+def get_channels_avatars_bulk(logins: list, token: str):
     default_avatar = "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png"
-    if not channel_login:
-        return default_avatar
+    if not logins:
+        return {}
+
+    url = "https://gql.twitch.tv/gql"
+    headers = {
+        "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
+        "Authorization": f"OAuth {token}" if token else ""
+    }
+    
+    # Запрос пачки логинов в 1 быстрый запрос
+    logins_json = "[" + ",".join([f'"{l.strip().lower()}"' for l in logins if l.strip()]) + "]"
+    query = f"""
+    query {{
+      users(logins: {logins_json}) {{
+        login
+        displayName
+        profileImageURL(width: 70)
+      }}
+    }}
+    """
+    avatars_map = {}
     try:
-        headers = {"Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko"}
-        resp = requests.get(f"https://api.twitch.tv/helix/users?login={channel_login.strip().lower()}", headers=headers, timeout=5)
+        resp = requests.post(url, json={"query": query}, headers=headers, timeout=4)
         if resp.status_code == 200:
-            data = resp.json().get("data", [])
-            if data:
-                return data[0].get("profile_image_url") or default_avatar
+            data = resp.json().get("data") or {}
+            users = data.get("users") or []
+            for u in users:
+                if u and u.get("login"):
+                    avatars_map[u["login"].lower()] = {
+                        "name": u.get("displayName") or u["login"],
+                        "avatar": u.get("profileImageURL") or default_avatar
+                    }
     except Exception as e:
-        print(f"[AVATAR FETCH ERROR] {e}")
-    return default_avatar
+        print(f"[BULK AVATAR ERROR] {e}")
+
+    # Заполняем дефолтами тех, кого Twitch не отдал
+    for l in logins:
+        clean_l = l.strip().lower()
+        if clean_l and clean_l not in avatars_map:
+            avatars_map[clean_l] = {
+                "name": clean_l,
+                "avatar": default_avatar
+            }
+            
+    return avatars_map
 
 def worker_thread(username: str, auth_token: str, streamers: list):
     try:
@@ -175,18 +209,21 @@ async def dashboard(request: Request):
 
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT selected_streamers FROM users WHERE username = ?", (user,))
+        cursor.execute("SELECT selected_streamers, auth_token FROM users WHERE username = ?", (user,))
         row = cursor.fetchone()
         saved_streamers = [s.strip().lower() for s in row[0].split(",")] if row and row[0] else []
+        auth_token = row[1] if row else ""
 
+    # Мгновенная пакетная загрузка аватарок в 1 запрос без блокировок
+    avatars_map = get_channels_avatars_bulk(saved_streamers, auth_token)
     streamers = []
     for s_login in saved_streamers:
         if s_login:
-            avatar = get_channel_avatar(s_login)
+            info = avatars_map.get(s_login, {})
             streamers.append({
                 "login": s_login,
-                "name": s_login,
-                "avatar": avatar,
+                "name": info.get("name", s_login),
+                "avatar": info.get("avatar", "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png"),
                 "is_live": False
             })
 
