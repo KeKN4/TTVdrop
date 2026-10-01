@@ -42,7 +42,6 @@ init_db()
 
 active_miners = {}
 
-# Проверка токена и получение профиля
 def verify_twitch_token(token: str):
     url = "https://gql.twitch.tv/gql"
     headers = {
@@ -62,15 +61,12 @@ def verify_twitch_token(token: str):
         print(f"[AUTH ERROR] {e}")
     return None, None, None
 
-# Получение реальной аватарки канала через публичный Helix API Twitch
 def get_channel_avatar(channel_login: str):
     default_avatar = "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png"
     if not channel_login:
         return default_avatar
     try:
-        headers = {
-            "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko"
-        }
+        headers = {"Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko"}
         resp = requests.get(f"https://api.twitch.tv/helix/users?login={channel_login.strip().lower()}", headers=headers, timeout=5)
         if resp.status_code == 200:
             data = resp.json().get("data", [])
@@ -80,7 +76,6 @@ def get_channel_avatar(channel_login: str):
         print(f"[AVATAR FETCH ERROR] {e}")
     return default_avatar
 
-# Фоновый поток майнера
 def worker_thread(username: str, auth_token: str, streamers: list):
     try:
         active_miners[username]["status"] = "В сети (Фарминг)"
