@@ -62,36 +62,23 @@ def verify_twitch_token(token: str):
         print(f"[AUTH ERROR] {e}")
     return None, None, None
 
-def get_user_follows_full(login: str, token: str):
-    streamers = {}
-    
-    # Пытаемся достать через GQL
+# Получение реальной аватарки канала через публичный Helix API Twitch
+def get_channel_avatar(channel_login: str):
+    default_avatar = "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png"
+    if not channel_login:
+        return default_avatar
     try:
-        session = requests.Session()
-        session.cookies.set("auth-token", token, domain=".twitch.tv")
         headers = {
-            "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
-            "Authorization": f"OAuth {token}",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko"
         }
-        gql_query = "query { currentUser { follows(first: 100) { edges { node { login displayName profileImageURL(width: 70) stream { id } } } } } }"
-        resp = session.post("https://gql.twitch.tv/gql", json={"query": gql_query}, headers=headers, timeout=6)
+        resp = requests.get(f"https://api.twitch.tv/helix/users?login={channel_login.strip().lower()}", headers=headers, timeout=5)
         if resp.status_code == 200:
-            edges = (((resp.json().get("data") or {}).get("currentUser") or {}).get("follows") or {}).get("edges") or []
-            for edge in edges:
-                node = (edge or {}).get("node")
-                if node and node.get("login"):
-                    ch_log = node["login"]
-                    streamers[ch_log] = {
-                        "login": ch_log,
-                        "name": node.get("displayName") or ch_log,
-                        "avatar": node.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
-                        "is_live": node.get("stream") is not None
-                    }
+            data = resp.json().get("data", [])
+            if data:
+                return data[0].get("profile_image_url") or default_avatar
     except Exception as e:
-        print(f"[GQL ERROR] {e}")
-
-    return list(streamers.values())
+        print(f"[AVATAR FETCH ERROR] {e}")
+    return default_avatar
 
 # Фоновый поток майнера
 def worker_thread(username: str, auth_token: str, streamers: list):
@@ -193,21 +180,19 @@ async def dashboard(request: Request):
 
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT selected_streamers, auth_token FROM users WHERE username = ?", (user,))
+        cursor.execute("SELECT selected_streamers FROM users WHERE username = ?", (user,))
         row = cursor.fetchone()
-        saved_streamers = [s.strip() for s in row[0].split(",")] if row and row[0] else []
-        auth_token = row[1] if row else ""
+        saved_streamers = [s.strip().lower() for s in row[0].split(",")] if row and row[0] else []
 
-    followed_streamers = get_user_follows_full(user, auth_token)
-
-    # Объединяем с тем, что уже было сохранено или введено вручную
-    followed_logins = {s["login"] for s in followed_streamers}
-    for s_saved in saved_streamers:
-        if s_saved and s_saved not in followed_logins:
-            followed_streamers.append({
-                "login": s_saved,
-                "name": s_saved,
-                "avatar": "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
+    # Формируем список каналов с подгрузкой аватарок
+    streamers = []
+    for s_login in saved_streamers:
+        if s_login:
+            avatar = get_channel_avatar(s_login)
+            streamers.append({
+                "login": s_login,
+                "name": s_login,
+                "avatar": avatar,
                 "is_live": False
             })
 
@@ -221,12 +206,53 @@ async def dashboard(request: Request):
             "username": user,
             "display_name": display_name or user,
             "avatar_url": avatar_url,
-            "streamers": followed_streamers,
+            "streamers": streamers,
             "selected_channels": saved_streamers,
             "status": status,
             "is_running": is_running
         }
     )
+
+@app.post("/add_channel")
+async def add_channel(request: Request, new_channel: str = Form(...)):
+    user, _, _ = get_current_user_info(request)
+    if not user:
+        return RedirectResponse(url="/login")
+
+    new_channel = new_channel.strip().lower().replace("@", "")
+    if new_channel:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT selected_streamers FROM users WHERE username = ?", (user,))
+            row = cursor.fetchone()
+            saved = [s.strip().lower() for s in row[0].split(",")] if row and row[0] else []
+            
+            if new_channel not in saved:
+                saved.append(new_channel)
+                cursor.execute("UPDATE users SET selected_streamers = ? WHERE username = ?", (",".join(saved), user))
+                conn.commit()
+
+    return RedirectResponse(url="/dashboard", status_code=303)
+
+@app.post("/remove_channel")
+async def remove_channel(request: Request, channel: str = Form(...)):
+    user, _, _ = get_current_user_info(request)
+    if not user:
+        return RedirectResponse(url="/login")
+
+    channel = channel.strip().lower()
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT selected_streamers FROM users WHERE username = ?", (user,))
+        row = cursor.fetchone()
+        saved = [s.strip().lower() for s in row[0].split(",")] if row and row[0] else []
+        
+        if channel in saved:
+            saved.remove(channel)
+            cursor.execute("UPDATE users SET selected_streamers = ? WHERE username = ?", (",".join(saved), user))
+            conn.commit()
+
+    return RedirectResponse(url="/dashboard", status_code=303)
 
 @app.post("/start_miner")
 async def start_miner(request: Request):
@@ -234,16 +260,12 @@ async def start_miner(request: Request):
     if not user:
         return RedirectResponse(url="/login")
 
-    form = await request.form()
-    chosen_channels = form.getlist("channels")
-
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE users SET selected_streamers = ? WHERE username = ?", (",".join(chosen_channels), user))
-        cursor.execute("SELECT auth_token FROM users WHERE username = ?", (user,))
+        cursor.execute("SELECT selected_streamers, auth_token FROM users WHERE username = ?", (user,))
         row = cursor.fetchone()
-        auth_token = row[0] if row else ""
-        conn.commit()
+        chosen_channels = [s.strip() for s in row[0].split(",")] if row and row[0] else []
+        auth_token = row[1] if row else ""
 
     if user in active_miners:
         del active_miners[user]
