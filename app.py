@@ -7,7 +7,7 @@ import threading
 import signal
 import requests
 from fastapi import FastAPI, Request, Form, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 import uvicorn
 
@@ -43,13 +43,13 @@ init_db()
 
 active_miners = {}
 
-# Перехватчик системного вывода stdout для отлова кода активации с полной поддержкой TTY
-class OutputInterceptor:
-    def __init__(self, original_stdout):
-        self.original_stdout = original_stdout
+# Глобальный перехватчик stdout и stderr
+class UniversalInterceptor:
+    def __init__(self, stream):
+        self.stream = stream
 
     def write(self, text):
-        self.original_stdout.write(text)
+        self.stream.write(text)
         if "enter this code:" in text:
             match = re.search(r'enter this code:\s*([A-Z0-9]+)', text, re.IGNORECASE)
             if match:
@@ -57,21 +57,24 @@ class OutputInterceptor:
                 for user in active_miners:
                     active_miners[user]["auth_code"] = code
                     active_miners[user]["status"] = "Требуется активация"
-        elif "You are now logged in" in text or "Logged in successfully" in text:
+        elif "You are now logged in" in text or "Logged in successfully" in text or "Start session:" in text:
             for user in active_miners:
-                active_miners[user]["auth_code"] = None
-                active_miners[user]["status"] = "В сети (Фарминг)"
+                if active_miners[user].get("auth_code"):
+                    active_miners[user]["auth_code"] = None
+                    active_miners[user]["status"] = "В сети (Фарминг)"
 
     def flush(self):
-        self.original_stdout.flush()
+        self.stream.flush()
 
     def isatty(self):
-        return hasattr(self.original_stdout, "isatty") and self.original_stdout.isatty()
+        return hasattr(self.stream, "isatty") and self.stream.isatty()
 
     def __getattr__(self, name):
-        return getattr(self.original_stdout, name)
+        return getattr(self.stream, name)
 
-sys.stdout = OutputInterceptor(sys.stdout)
+# Логи майнера идут в stderr, перехватываем оба потока
+sys.stdout = UniversalInterceptor(sys.stdout)
+sys.stderr = UniversalInterceptor(sys.stderr)
 
 def verify_twitch_token(token: str):
     url = "https://gql.twitch.tv/gql"
@@ -97,16 +100,16 @@ def get_channels_avatars_bulk(logins: list, token: str):
     if not logins:
         return {}
 
+    clean_logins = [l.strip().lower() for l in logins if l.strip()]
+    if not clean_logins:
+        return {}
+
     url = "https://gql.twitch.tv/gql"
     headers = {
         "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
         "Authorization": f"OAuth {token}" if token else ""
     }
     
-    clean_logins = [l.strip().lower() for l in logins if l.strip()]
-    if not clean_logins:
-        return {}
-        
     logins_json = "[" + ",".join([f'"{l}"' for l in clean_logins]) + "]"
     query = f"""
     query {{
@@ -134,10 +137,7 @@ def get_channels_avatars_bulk(logins: list, token: str):
 
     for l in clean_logins:
         if l not in avatars_map:
-            avatars_map[l] = {
-                "name": l,
-                "avatar": default_avatar
-            }
+            avatars_map[l] = {"name": l, "avatar": default_avatar}
             
     return avatars_map
 
@@ -282,6 +282,19 @@ async def dashboard(request: Request):
             "is_running": is_running
         }
     )
+
+# Быстрый API эндпоинт для проверки статуса и кода в реальном времени
+@app.get("/api/check_status")
+async def check_status(request: Request):
+    user, _, _ = get_current_user_info(request)
+    if not user:
+        return JSONResponse({"status": "unauthorized", "auth_code": None})
+    user_miner = active_miners.get(user, {})
+    return JSONResponse({
+        "status": user_miner.get("status", "Остановлен"),
+        "auth_code": user_miner.get("auth_code", None),
+        "is_running": user in active_miners and "miner" in active_miners[user]
+    })
 
 @app.post("/add_channel")
 async def add_channel(request: Request, new_channel: str = Form(...)):
