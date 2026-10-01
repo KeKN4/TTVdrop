@@ -29,8 +29,7 @@ def init_db():
                 auth_token TEXT,
                 selected_streamers TEXT,
                 status TEXT DEFAULT 'Остановлен',
-                auto_claim_drops INTEGER DEFAULT 1,
-                priority_mode TEXT DEFAULT 'STREAK'
+                auto_claim_drops INTEGER DEFAULT 1
             )
         """)
         cursor.execute("""
@@ -39,29 +38,22 @@ def init_db():
                 username TEXT
             )
         """)
-        
-        # Автоматическая миграция для уже созданных БД
         cursor.execute("PRAGMA table_info(users)")
         columns = [row[1] for row in cursor.fetchall()]
         if "auto_claim_drops" not in columns:
             cursor.execute("ALTER TABLE users ADD COLUMN auto_claim_drops INTEGER DEFAULT 1")
-        if "priority_mode" not in columns:
-            cursor.execute("ALTER TABLE users ADD COLUMN priority_mode TEXT DEFAULT 'STREAK'")
-            
         conn.commit()
 
 init_db()
 
 active_miners = {}
 
-# Глобальный перехватчик потоков stdout и stderr
 class UniversalInterceptor:
     def __init__(self, stream):
         self.stream = stream
 
     def write(self, text):
         self.stream.write(text)
-        # Ловим код активации устройства
         if "enter this code:" in text:
             match = re.search(r'enter this code:\s*([A-Z0-9]+)', text, re.IGNORECASE)
             if match:
@@ -69,7 +61,6 @@ class UniversalInterceptor:
                 for user in active_miners:
                     active_miners[user]["auth_code"] = code
                     active_miners[user]["status"] = "Требуется активация"
-        # Ловим успешный старт майнера и переход к отслеживанию
         elif any(phrase in text for phrase in [
             "Start session:", 
             "Mining started", 
@@ -113,8 +104,38 @@ def verify_twitch_token(token: str):
         print(f"[AUTH ERROR] {e}")
     return None, None, None
 
+def get_channel_points(channel_login: str, token: str):
+    url = "https://gql.twitch.tv/gql"
+    headers = {
+        "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
+        "Authorization": f"OAuth {token}" if token else ""
+    }
+    query = f"""
+    query {{
+      community(channelLogin: "{channel_login}") {{
+        channel {{
+          self {{
+            communityPoints {{
+              balance
+            }}
+          }}
+        }}
+      }}
+    }}
+    """
+    try:
+        resp = requests.post(url, json={"query": query}, headers=headers, timeout=3)
+        if resp.status_code == 200:
+            comm = (resp.json().get("data") or {}).get("community") or {}
+            pts = (((comm.get("channel") or {}).get("self") or {}).get("communityPoints") or {}).get("balance")
+            if pts is not None:
+                return f"{pts:,}".replace(",", " ")
+    except Exception:
+        pass
+    return "—"
+
 def get_channels_data_bulk(logins: list, token: str):
-    default_avatar = "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png"
+    svg_fallback = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='70' height='70'><rect width='70' height='70' fill='%233a4334'/><circle cx='35' cy='28' r='14' fill='%236d7f62'/><ellipse cx='35' cy='56' rx='22' ry='14' fill='%236d7f62'/></svg>"
     if not logins:
         return {}
 
@@ -128,58 +149,51 @@ def get_channels_data_bulk(logins: list, token: str):
         "Authorization": f"OAuth {token}" if token else ""
     }
     
-    logins_json = "[" + ",".join([f'"{l}"' for l in clean_logins]) + "]"
-    query = f"""
-    query {{
-      users(logins: {logins_json}) {{
-        login
-        displayName
-        profileImageURL(width: 70)
-        stream {{
-          id
-          viewersCount
-          game {{
-            name
-          }}
+    subqueries = []
+    for idx, l in enumerate(clean_logins):
+        subqueries.append(f"""
+        u{idx}: user(login: "{l}") {{
+            login
+            displayName
+            profileImageURL(width: 70)
+            stream {{
+                id
+                viewersCount
+                game {{
+                    name
+                }}
+            }}
         }}
-        communityPoints {{
-          user {{
-            balance
-          }}
-        }}
-      }}
-    }}
-    """
+        """)
+    query = "query {\n" + "\n".join(subqueries) + "\n}"
+    
     channels_map = {}
     try:
         resp = requests.post(url, json={"query": query}, headers=headers, timeout=5)
         if resp.status_code == 200:
             data = resp.json().get("data") or {}
-            users = data.get("users") or []
-            for u in users:
-                if u and u.get("login"):
+            for idx, l in enumerate(clean_logins):
+                u = data.get(f"u{idx}")
+                if u:
                     stream = u.get("stream")
-                    points_data = u.get("communityPoints") or {}
-                    balance = (points_data.get("user") or {}).get("balance", "N/A")
-                    
-                    channels_map[u["login"].lower()] = {
-                        "name": u.get("displayName") or u["login"],
-                        "avatar": u.get("profileImageURL") or default_avatar,
+                    channels_map[l] = {
+                        "name": u.get("displayName") or l,
+                        "avatar": u.get("profileImageURL") or svg_fallback,
                         "is_live": stream is not None,
                         "game": stream.get("game", {}).get("name") if stream and stream.get("game") else "Офлайн",
                         "viewers": stream.get("viewersCount", 0) if stream else 0,
-                        "points": f"{balance:,}".replace(",", " ") if isinstance(balance, int) else "—"
+                        "points": get_channel_points(l, token)
                     }
     except Exception as e:
-        print(f"[BULK DATA ERROR] {e}")
+        print(f"[BULK QUERY ERROR] {e}")
 
     for l in clean_logins:
         if l not in channels_map:
             channels_map[l] = {
                 "name": l,
-                "avatar": default_avatar,
+                "avatar": svg_fallback,
                 "is_live": False,
-                "game": "Неизвестно",
+                "game": "Офлайн",
                 "viewers": 0,
                 "points": "—"
             }
@@ -189,7 +203,6 @@ def get_channels_data_bulk(logins: list, token: str):
 def worker_thread(username: str, auth_token: str, streamers: list):
     try:
         signal.signal = lambda *args, **kwargs: None
-
         active_miners[username]["status"] = "Запуск (Ожидание)"
         
         twitch_miner = TwitchChannelPointsMiner(
@@ -209,7 +222,6 @@ def worker_thread(username: str, auth_token: str, streamers: list):
 
         active_miners[username]["miner"] = twitch_miner
         channels_to_mine = [s.strip().lower() for s in streamers if s.strip()]
-        
         twitch_miner.mine(channels_to_mine)
         
     except Exception as e:
@@ -244,7 +256,6 @@ async def login_page(request: Request):
 @app.post("/login")
 async def do_login(request: Request, response: Response, auth_token: str = Form(...)):
     auth_token = auth_token.strip().replace("oauth:", "").replace("Bearer ", "")
-    
     username, display_name, avatar_url = verify_twitch_token(auth_token)
     if not username:
         return templates.TemplateResponse(
@@ -291,12 +302,11 @@ async def dashboard(request: Request):
 
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT selected_streamers, auth_token, auto_claim_drops, priority_mode FROM users WHERE username = ?", (user,))
+        cursor.execute("SELECT selected_streamers, auth_token, auto_claim_drops FROM users WHERE username = ?", (user,))
         row = cursor.fetchone()
         saved_streamers = [s.strip().lower() for s in row[0].split(",")] if row and row[0] else []
         auth_token = row[1] if row else ""
         auto_claim_drops = row[2] if row and len(row) > 2 and row[2] is not None else 1
-        priority_mode = row[3] if row and len(row) > 3 and row[3] else "STREAK"
 
     channels_data = get_channels_data_bulk(saved_streamers, auth_token)
     streamers = []
@@ -306,7 +316,7 @@ async def dashboard(request: Request):
             streamers.append({
                 "login": s_login,
                 "name": info.get("name", s_login),
-                "avatar": info.get("avatar", "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png"),
+                "avatar": info.get("avatar"),
                 "is_live": info.get("is_live", False),
                 "game": info.get("game", "Офлайн"),
                 "viewers": info.get("viewers", 0),
@@ -330,8 +340,7 @@ async def dashboard(request: Request):
             "status": status,
             "auth_code": auth_code,
             "is_running": is_running,
-            "auto_claim_drops": auto_claim_drops,
-            "priority_mode": priority_mode
+            "auto_claim_drops": auto_claim_drops
         }
     )
 
@@ -389,7 +398,7 @@ async def remove_channel(request: Request, channel: str = Form(...)):
     return RedirectResponse(url="/dashboard", status_code=303)
 
 @app.post("/update_settings")
-async def update_settings(request: Request, priority_mode: str = Form("STREAK"), auto_claim: str = Form(None)):
+async def update_settings(request: Request, auto_claim: str = Form(None)):
     user, _, _ = get_current_user_info(request)
     if not user:
         return RedirectResponse(url="/login")
@@ -397,7 +406,7 @@ async def update_settings(request: Request, priority_mode: str = Form("STREAK"),
     auto_claim_val = 1 if auto_claim == "on" else 0
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE users SET priority_mode = ?, auto_claim_drops = ? WHERE username = ?", (priority_mode, auto_claim_val, user))
+        cursor.execute("UPDATE users SET auto_claim_drops = ? WHERE username = ?", (auto_claim_val, user))
         conn.commit()
 
     return RedirectResponse(url="/dashboard", status_code=303)
