@@ -42,7 +42,7 @@ init_db()
 
 active_miners = {}
 
-# Валидация токена и получение профиля пользователя
+# Валидация auth-token и получение данных профиля
 def verify_twitch_token(token: str):
     url = "https://gql.twitch.tv/gql"
     headers = {
@@ -60,52 +60,102 @@ def verify_twitch_token(token: str):
         pass
     return None, None, None
 
-# Получение списка подписок с аватарками и логинами
+# Надежное получение списка подписок (онлайн + оффлайн) с аватарками
 def get_user_follows_full(login: str, token: str):
     url = "https://gql.twitch.tv/gql"
     headers = {
         "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
-        "Authorization": f"OAuth {token}"
+        "Authorization": f"OAuth {token}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
-    # Запрос 100 подписок с никами и аватарками
-    query = """
-    query($login: String!) {
-      user(login: $login) {
+
+    query_followed = """
+    query {
+      currentUser {
+        followedLiveUsers {
+          nodes {
+            login
+            displayName
+            profileImageURL(width: 70)
+            stream { id }
+          }
+        }
+      }
+      user(login: "%s") {
         follows(first: 100) {
           edges {
             node {
               login
               displayName
-              profileImageURL(width: 50)
-              stream {
-                id
-                type
-              }
+              profileImageURL(width: 70)
             }
           }
         }
       }
     }
-    """
-    try:
-        resp = requests.post(url, json={"query": query, "variables": {"login": login}}, headers=headers, timeout=8)
-        if resp.status_code == 200:
-            edges = resp.json().get("data", {}).get("user", {}).get("follows", {}).get("edges", [])
-            streamers = []
-            for e in edges:
-                node = e.get("node")
-                if node:
-                    streamers.append({
-                        "login": node.get("login"),
-                        "name": node.get("displayName") or node.get("login"),
-                        "avatar": node.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
-                        "is_live": node.get("stream") is not None
-                    })
-            return streamers
-    except Exception:
-        pass
-    return []
+    """ % login
 
+    streamers = {}
+
+    try:
+        resp = requests.post(url, json={"query": query_followed}, headers=headers, timeout=8)
+        if resp.status_code == 200:
+            data = resp.json().get("data", {})
+            
+            # Стримеры онлайн
+            live_nodes = data.get("currentUser", {}).get("followedLiveUsers", {}).get("nodes", []) if data.get("currentUser") else []
+            for node in live_nodes:
+                if node and node.get("login"):
+                    streamers[node["login"]] = {
+                        "login": node["login"],
+                        "name": node.get("displayName", node["login"]),
+                        "avatar": node.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
+                        "is_live": True
+                    }
+
+            # Стримеры оффлайн
+            follow_edges = data.get("user", {}).get("follows", {}).get("edges", []) if data.get("user") else []
+            for edge in follow_edges:
+                node = edge.get("node")
+                if node and node.get("login") and node["login"] not in streamers:
+                    streamers[node["login"]] = {
+                        "login": node["login"],
+                        "name": node.get("displayName", node["login"]),
+                        "avatar": node.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
+                        "is_live": False
+                    }
+    except Exception as e:
+        print(f"Error fetching GQL follows: {e}")
+
+    # Fallback через Helix API, если GraphQL ограничил выдачу follows
+    if not streamers:
+        try:
+            u_resp = requests.get("https://api.twitch.tv/helix/users", headers=headers, timeout=6)
+            if u_resp.status_code == 200:
+                user_id = u_resp.json()["data"][0]["id"]
+                f_resp = requests.get(
+                    f"https://api.twitch.tv/helix/channels/followed?user_id={user_id}&first=100",
+                    headers=headers,
+                    timeout=8
+                )
+                if f_resp.status_code == 200:
+                    for item in f_resp.json().get("data", []):
+                        ch_login = item.get("broadcaster_login")
+                        ch_name = item.get("broadcaster_name", ch_login)
+                        streamers[ch_login] = {
+                            "login": ch_login,
+                            "name": ch_name,
+                            "avatar": "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
+                            "is_live": False
+                        }
+        except Exception as e:
+            print(f"Fallback Helix error: {e}")
+
+    result = list(streamers.values())
+    result.sort(key=lambda x: (not x["is_live"], x["name"].lower()))
+    return result
+
+# Поток майнера
 def worker_thread(username: str, auth_token: str, streamers: list):
     try:
         active_miners[username]["status"] = "В сети (Фарминг)"
