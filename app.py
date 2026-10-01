@@ -24,6 +24,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
                 display_name TEXT,
+                avatar_url TEXT,
                 auth_token TEXT,
                 selected_streamers TEXT,
                 status TEXT DEFAULT 'Остановлен'
@@ -41,41 +42,45 @@ init_db()
 
 active_miners = {}
 
-# Валидация auth-token и получение данных профиля
+# Валидация токена и получение профиля пользователя
 def verify_twitch_token(token: str):
     url = "https://gql.twitch.tv/gql"
     headers = {
         "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
         "Authorization": f"OAuth {token}"
     }
-    payload = {"query": "query { currentUser { id login displayName } }"}
+    payload = {"query": "query { currentUser { id login displayName profileImageURL(width: 70) } }"}
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=6)
+        resp = requests.post(url, json=payload, headers=headers, timeout=7)
         if resp.status_code == 200:
-            data = resp.json().get("data", {})
-            user = data.get("currentUser")
+            user = resp.json().get("data", {}).get("currentUser")
             if user and user.get("login"):
-                return user["login"], user.get("displayName", user["login"])
+                return user["login"], user.get("displayName", user["login"]), user.get("profileImageURL", "")
     except Exception:
         pass
-    return None, None
+    return None, None, None
 
-# Надежное получение списка подписок через currentUser
-def get_user_follows(token: str):
+# Получение списка подписок с аватарками и логинами
+def get_user_follows_full(login: str, token: str):
     url = "https://gql.twitch.tv/gql"
     headers = {
         "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
         "Authorization": f"OAuth {token}"
     }
-    # Запрос напрямую из контекста авторизованного пользователя
+    # Запрос 100 подписок с никами и аватарками
     query = """
-    query {
-      currentUser {
+    query($login: String!) {
+      user(login: $login) {
         follows(first: 100) {
           edges {
             node {
               login
               displayName
+              profileImageURL(width: 50)
+              stream {
+                id
+                type
+              }
             }
           }
         }
@@ -83,23 +88,24 @@ def get_user_follows(token: str):
     }
     """
     try:
-        resp = requests.post(url, json={"query": query}, headers=headers, timeout=8)
+        resp = requests.post(url, json={"query": query, "variables": {"login": login}}, headers=headers, timeout=8)
         if resp.status_code == 200:
-            data = resp.json().get("data", {})
-            user_data = data.get("currentUser")
-            if user_data and user_data.get("follows"):
-                edges = user_data["follows"].get("edges", [])
-                channels = []
-                for e in edges:
-                    node = e.get("node")
-                    if node and node.get("login"):
-                        channels.append(node["login"])
-                return sorted(channels)
+            edges = resp.json().get("data", {}).get("user", {}).get("follows", {}).get("edges", [])
+            streamers = []
+            for e in edges:
+                node = e.get("node")
+                if node:
+                    streamers.append({
+                        "login": node.get("login"),
+                        "name": node.get("displayName") or node.get("login"),
+                        "avatar": node.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
+                        "is_live": node.get("stream") is not None
+                    })
+            return streamers
     except Exception:
         pass
     return []
 
-# Поток фарминга
 def worker_thread(username: str, auth_token: str, streamers: list):
     try:
         active_miners[username]["status"] = "В сети (Фарминг)"
@@ -120,23 +126,23 @@ def worker_thread(username: str, auth_token: str, streamers: list):
 def get_current_user_info(request: Request):
     token = request.cookies.get("steam_session")
     if not token:
-        return None, None
+        return None, None, None
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT u.username, u.display_name FROM sessions s JOIN users u ON s.username = u.username WHERE s.token = ?", (token,))
+        cursor.execute("SELECT u.username, u.display_name, u.avatar_url FROM sessions s JOIN users u ON s.username = u.username WHERE s.token = ?", (token,))
         row = cursor.fetchone()
-        return (row[0], row[1]) if row else (None, None)
+        return (row[0], row[1], row[2]) if row else (None, None, None)
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    user, _ = get_current_user_info(request)
+    user, _, _ = get_current_user_info(request)
     if not user:
         return RedirectResponse(url="/login")
     return RedirectResponse(url="/dashboard")
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    user, _ = get_current_user_info(request)
+    user, _, _ = get_current_user_info(request)
     if user:
         return RedirectResponse(url="/dashboard")
     return templates.TemplateResponse(request=request, name="login.html", context={"error": None})
@@ -145,24 +151,25 @@ async def login_page(request: Request):
 async def do_login(request: Request, response: Response, auth_token: str = Form(...)):
     auth_token = auth_token.strip().replace("oauth:", "")
     
-    username, display_name = verify_twitch_token(auth_token)
+    username, display_name, avatar_url = verify_twitch_token(auth_token)
     if not username:
         return templates.TemplateResponse(
             request=request, 
             name="login.html", 
-            context={"error": "Неверный auth-token. Twitch отклонил авторизацию."}
+            context={"error": "Неверный auth-token. Twitch отклонил запрос."}
         )
 
     session_token = secrets.token_hex(24)
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO users (username, display_name, auth_token) 
-            VALUES (?, ?, ?) 
+            INSERT INTO users (username, display_name, avatar_url, auth_token) 
+            VALUES (?, ?, ?, ?) 
             ON CONFLICT(username) DO UPDATE SET 
                 display_name=excluded.display_name,
+                avatar_url=excluded.avatar_url,
                 auth_token=excluded.auth_token
-        """, (username, display_name, auth_token))
+        """, (username, display_name, avatar_url, auth_token))
         cursor.execute("INSERT OR REPLACE INTO sessions (token, username) VALUES (?, ?)", (session_token, username))
         conn.commit()
 
@@ -184,7 +191,7 @@ async def logout(request: Request):
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    user, display_name = get_current_user_info(request)
+    user, display_name, avatar_url = get_current_user_info(request)
     if not user:
         return RedirectResponse(url="/login")
 
@@ -195,8 +202,7 @@ async def dashboard(request: Request):
         saved_streamers = [s.strip() for s in row[0].split(",")] if row and row[0] else []
         auth_token = row[1] if row else ""
 
-    followed_streamers = get_user_follows(auth_token)
-    all_channels = sorted(list(set(followed_streamers + saved_streamers)))
+    followed_streamers = get_user_follows_full(user, auth_token)
 
     status = active_miners.get(user, {}).get("status", "Остановлен")
     is_running = user in active_miners and "miner" in active_miners[user]
@@ -207,7 +213,8 @@ async def dashboard(request: Request):
         context={
             "username": user,
             "display_name": display_name or user,
-            "channels": all_channels,
+            "avatar_url": avatar_url,
+            "streamers": followed_streamers,
             "selected_channels": saved_streamers,
             "status": status,
             "is_running": is_running
@@ -216,15 +223,12 @@ async def dashboard(request: Request):
 
 @app.post("/start_miner")
 async def start_miner(request: Request):
-    user, _ = get_current_user_info(request)
+    user, _, _ = get_current_user_info(request)
     if not user:
         return RedirectResponse(url="/login")
 
     form = await request.form()
     chosen_channels = form.getlist("channels")
-    custom_ch = form.get("custom_channel", "").strip().lower()
-    if custom_ch and custom_ch not in chosen_channels:
-        chosen_channels.append(custom_ch)
 
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
@@ -242,7 +246,7 @@ async def start_miner(request: Request):
 
 @app.post("/stop_miner")
 async def stop_miner(request: Request):
-    user, _ = get_current_user_info(request)
+    user, _, _ = get_current_user_info(request)
     if user and user in active_miners:
         del active_miners[user]
     return RedirectResponse(url="/dashboard", status_code=303)
