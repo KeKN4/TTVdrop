@@ -184,7 +184,6 @@ async def dashboard(request: Request):
         row = cursor.fetchone()
         saved_streamers = [s.strip().lower() for s in row[0].split(",")] if row and row[0] else []
 
-    # Формируем список каналов с подгрузкой аватарок
     streamers = []
     for s_login in saved_streamers:
         if s_login:
