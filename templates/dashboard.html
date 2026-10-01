@@ -16,6 +16,7 @@
             --steam-text-muted: #8d9885;
             --steam-accent: #a3b899;
             --steam-green: #68b248;
+            --steam-yellow: #d8c358;
             --steam-red: #c95252;
         }
 
@@ -33,7 +34,6 @@
             font-size: 11px;
         }
 
-        /* Окно классического Steam v1.0 */
         .steam-window {
             max-width: 760px;
             margin: 0 auto;
@@ -43,7 +43,6 @@
             padding: 2px;
         }
 
-        /* Заголовок окна */
         .title-bar {
             background: linear-gradient(to right, #434e3c, #3a4434);
             padding: 5px 8px;
@@ -86,7 +85,6 @@
             background: var(--steam-light);
         }
 
-        /* Меню навигации */
         .menu-bar {
             display: flex;
             gap: 16px;
@@ -117,7 +115,6 @@
             gap: 14px;
         }
 
-        /* Группбоксы / панели */
         .group-box {
             background-color: var(--steam-dark);
             border: 1px solid var(--steam-border-lo);
@@ -139,16 +136,21 @@
             justify-content: space-between;
         }
 
-        /* Формы и поля ввода */
-        .form-row {
-            margin-bottom: 10px;
+        .activation-box {
+            background: #38351c;
+            border: 1px solid var(--steam-yellow);
+            color: #fff;
+            padding: 12px;
+            margin-bottom: 14px;
+            text-align: center;
         }
-
-        label {
-            display: block;
-            margin-bottom: 4px;
-            color: var(--steam-text);
-            font-size: 11px;
+        .activation-code {
+            font-size: 24px;
+            font-weight: bold;
+            letter-spacing: 4px;
+            color: var(--steam-yellow);
+            margin: 8px 0;
+            user-select: text;
         }
 
         input[type="text"] {
@@ -167,7 +169,6 @@
             border-color: var(--steam-accent);
         }
 
-        /* Кнопки классического Steam */
         .steam-btn {
             background-color: var(--steam-bg);
             border-top: 1px solid var(--steam-border-hi);
@@ -205,7 +206,6 @@
             background-color: #6b4040;
         }
 
-        /* Список стримеров */
         .streamers-list {
             background-color: var(--steam-darker);
             border: 1px solid var(--steam-border-lo);
@@ -245,7 +245,6 @@
             font-weight: bold;
         }
 
-        /* Нижний статус-бар */
         .status-bar {
             background-color: var(--steam-dark);
             padding: 4px 8px;
@@ -260,7 +259,6 @@
 <body>
 
     <div class="steam-window">
-        <!-- Шапка окна -->
         <div class="title-bar">
             <div class="title">
                 <span>[Steam v1.0] Twitch Points Farm Monitor — {{ display_name }} (@{{ username }})</span>
@@ -272,7 +270,6 @@
             </div>
         </div>
 
-        <!-- Меню навигации -->
         <div class="menu-bar">
             <span class="menu-item active">Monitor</span>
             <span class="menu-item">Active Channels</span>
@@ -282,7 +279,24 @@
 
         <div class="content-area">
             
-            <!-- Панель статуса майнера -->
+            {% if auth_code %}
+            <!-- Блок с кодом для авторизации через Twitch TV Flow -->
+            <div class="activation-box">
+                <div style="font-weight: bold; font-size: 13px;">ТРЕБУЕТСЯ ПОДТВЕРЖДЕНИЕ ВХОДА</div>
+                <div style="margin-top: 4px;">
+                    Перейдите по ссылке: <a href="https://www.twitch.tv/activate" target="_blank" style="color: #68b248; font-weight: bold;">https://www.twitch.tv/activate</a>
+                </div>
+                <div class="activation-code">{{ auth_code }}</div>
+                <div style="font-size: 10px; color: var(--steam-text-muted);">
+                    Введите этот код на сайте Twitch. Страница обновится автоматически после подтверждения.
+                </div>
+            </div>
+            <script>
+                // Автообновление раз в 5 секунд, пока висит код
+                setTimeout(() => { window.location.reload(); }, 5000);
+            </script>
+            {% endif %}
+
             <div class="group-box">
                 <div class="group-title">Miner State & Actions</div>
                 <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -303,7 +317,6 @@
                 </div>
             </div>
 
-            <!-- Добавление каналов -->
             <div class="group-box">
                 <div class="group-title">Target Channels Configuration</div>
                 <form action="/add_channel" method="POST" style="display: flex; gap: 8px; margin-bottom: 12px;">
@@ -311,7 +324,6 @@
                     <button type="submit" class="steam-btn" style="white-space: nowrap;">Add Channel</button>
                 </form>
 
-                <!-- Список добавленных каналов с аватарками -->
                 <div class="streamers-list">
                     {% if streamers %}
                         {% for s in streamers %}
@@ -334,7 +346,6 @@
 
         </div>
 
-        <!-- Нижний статус-бар -->
         <div class="status-bar">
             <span>Server: 127.0.0.1:10000 (Operational)</span>
             <span>Target Channels: {{ streamers|length }}</span>
