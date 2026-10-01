@@ -48,12 +48,14 @@ init_db()
 
 active_miners = {}
 
+# Глобальный перехватчик потоков stdout и stderr
 class UniversalInterceptor:
     def __init__(self, stream):
         self.stream = stream
 
     def write(self, text):
         self.stream.write(text)
+        # Ловим код активации устройства TV Login
         if "enter this code:" in text:
             match = re.search(r'enter this code:\s*([A-Z0-9]+)', text, re.IGNORECASE)
             if match:
@@ -62,6 +64,7 @@ class UniversalInterceptor:
                     if data.get("status") in ["Запуск (Ожидание)", "Требуется активация"]:
                         data["auth_code"] = code
                         data["status"] = "Требуется активация"
+        # Ловим переход майнера к работе
         elif any(phrase in text for phrase in [
             "Start session:", 
             "Mining started", 
@@ -108,40 +111,39 @@ def verify_twitch_token(token: str):
 
 def get_channel_points(channel_login: str, token: str):
     if not token or not channel_login:
-        return "—"
+        return "0"
     url = "https://gql.twitch.tv/gql"
     headers = {
         "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
         "Authorization": f"OAuth {token}"
     }
-    payload = [
-        {
-            "operationName": "ChannelPointsContext",
-            "variables": {"channelLogin": channel_login.strip().lower()},
-            "extensions": {
-                "persistedQuery": {
-                    "version": 1,
-                    "sha256Hash": "9988081d7de3c73730ecc0074d22605b422f84e8d4d9ea444b3453618468103a"
-                }
-            }
-        }
-    ]
+    query = f"""
+    query {{
+      user(login: "{channel_login.strip().lower()}") {{
+        channel {{
+          self {{
+            communityPoints {{
+              balance
+            }}
+          }}
+        }}
+      }}
+    }}
+    """
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=3.5)
+        resp = requests.post(url, json={"query": query}, headers=headers, timeout=3.5)
         if resp.status_code == 200:
             res_json = resp.json()
-            if isinstance(res_json, list) and len(res_json) > 0:
-                data = res_json[0].get("data") or {}
-                community = data.get("community") or {}
-                channel = community.get("channel") or {}
-                self_ctx = channel.get("self") or {}
-                pts = (self_ctx.get("communityPoints") or {}).get("balance")
-                if pts is not None:
-                    return f"{pts:,}".replace(",", " ")
-                return "0"
+            data = res_json.get("data") or {}
+            user = data.get("user") or {}
+            channel = user.get("channel") or {}
+            self_data = channel.get("self") or {}
+            cp = self_data.get("communityPoints")
+            if cp and "balance" in cp and cp["balance"] is not None:
+                return f"{cp['balance']:,}".replace(",", " ")
     except Exception as e:
         print(f"[POINTS ERROR {channel_login}] {e}")
-    return "—"
+    return "0"
 
 def get_channels_data_bulk(logins: list, token: str):
     svg_fallback = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='70' height='70'><rect width='70' height='70' fill='%233a4334'/><circle cx='35' cy='28' r='14' fill='%236d7f62'/><ellipse cx='35' cy='56' rx='22' ry='14' fill='%236d7f62'/></svg>"
@@ -321,7 +323,7 @@ async def dashboard(request: Request):
                 "is_live": info.get("is_live", False),
                 "game": info.get("game", "Офлайн"),
                 "viewers": info.get("viewers", 0),
-                "points": info.get("points", "—")
+                "points": info.get("points", "0")
             })
 
     user_miner_data = active_miners.get(user, {})
