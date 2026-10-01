@@ -1,8 +1,10 @@
 import os
+import re
 import secrets
 import sqlite3
 import threading
 import signal
+import logging
 import requests
 from fastapi import FastAPI, Request, Form, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -40,6 +42,27 @@ def init_db():
 init_db()
 
 active_miners = {}
+
+# Перехватчик логов майнера для получения кода активации twitch.tv/activate
+class MinerLogHandler(logging.Handler):
+    def __init__(self, username):
+        super().__init__()
+        self.username = username
+
+    def emit(self, record):
+        msg = record.getMessage()
+        # Ловим код активации
+        if "enter this code:" in msg:
+            code_match = re.search(r'enter this code:\s*([A-Z0-9]+)', msg, re.IGNORECASE)
+            if code_match:
+                code = code_match.group(1).strip()
+                if self.username in active_miners:
+                    active_miners[self.username]["auth_code"] = code
+                    active_miners[self.username]["status"] = "Требуется активация"
+        elif "You are now logged in" in msg or "Logged in successfully" in msg:
+            if self.username in active_miners:
+                active_miners[self.username]["auth_code"] = None
+                active_miners[self.username]["status"] = "В сети (Фарминг)"
 
 def verify_twitch_token(token: str):
     url = "https://gql.twitch.tv/gql"
@@ -111,10 +134,14 @@ def get_channels_avatars_bulk(logins: list, token: str):
 
 def worker_thread(username: str, auth_token: str, streamers: list):
     try:
-        # Обходим ограничение signal в фоновом потоке
         signal.signal = lambda *args, **kwargs: None
 
-        active_miners[username]["status"] = "В сети (Фарминг)"
+        # Подключаем перехватчик логов
+        logger = logging.getLogger()
+        handler = MinerLogHandler(username)
+        logger.addHandler(handler)
+
+        active_miners[username]["status"] = "Запуск (Ожидание)"
         
         twitch_miner = TwitchChannelPointsMiner(
             username=username,
@@ -133,10 +160,9 @@ def worker_thread(username: str, auth_token: str, streamers: list):
 
         active_miners[username]["miner"] = twitch_miner
         
-        # Передаем обычный чистый список имен каналов напрямую
         channels_to_mine = [s.strip().lower() for s in streamers if s.strip()]
         
-        twitch_miner.analytics(host="0.0.0.0", port=0, refresh=5)
+        # Запускаем майнинг без analytics
         twitch_miner.mine(channels_to_mine)
         
     except Exception as e:
@@ -235,7 +261,9 @@ async def dashboard(request: Request):
                 "is_live": False
             })
 
-    status = active_miners.get(user, {}).get("status", "Остановлен")
+    user_miner_data = active_miners.get(user, {})
+    status = user_miner_data.get("status", "Остановлен")
+    auth_code = user_miner_data.get("auth_code", None)
     is_running = user in active_miners and "miner" in active_miners[user]
 
     return templates.TemplateResponse(
@@ -248,6 +276,7 @@ async def dashboard(request: Request):
             "streamers": streamers,
             "selected_channels": saved_streamers,
             "status": status,
+            "auth_code": auth_code,
             "is_running": is_running
         }
     )
@@ -311,7 +340,7 @@ async def start_miner(request: Request):
 
     if chosen_channels and auth_token:
         t = threading.Thread(target=worker_thread, args=(user, auth_token, chosen_channels), daemon=True)
-        active_miners[user] = {"thread": t, "status": "Запуск воркера..."}
+        active_miners[user] = {"thread": t, "status": "Запуск воркера...", "auth_code": None}
         t.start()
 
     return RedirectResponse(url="/dashboard", status_code=303)
