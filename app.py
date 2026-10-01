@@ -40,7 +40,7 @@ def init_db():
             )
         """)
         
-        # Автоматическая миграция для уже созданных баз данных
+        # Автоматическая миграция для уже созданных БД
         cursor.execute("PRAGMA table_info(users)")
         columns = [row[1] for row in cursor.fetchall()]
         if "auto_claim_drops" not in columns:
@@ -61,6 +61,7 @@ class UniversalInterceptor:
 
     def write(self, text):
         self.stream.write(text)
+        # Ловим код активации устройства
         if "enter this code:" in text:
             match = re.search(r'enter this code:\s*([A-Z0-9]+)', text, re.IGNORECASE)
             if match:
@@ -68,11 +69,18 @@ class UniversalInterceptor:
                 for user in active_miners:
                     active_miners[user]["auth_code"] = code
                     active_miners[user]["status"] = "Требуется активация"
-        elif "You are now logged in" in text or "Logged in successfully" in text or "Start session:" in text:
+        # Ловим успешный старт майнера и переход к отслеживанию
+        elif any(phrase in text for phrase in [
+            "Start session:", 
+            "Mining started", 
+            "Looking for", 
+            "Loaded streamer", 
+            "Waiting for next stream", 
+            "You are now logged in"
+        ]):
             for user in active_miners:
-                if active_miners[user].get("auth_code"):
-                    active_miners[user]["auth_code"] = None
-                    active_miners[user]["status"] = "В сети (Фарминг)"
+                active_miners[user]["auth_code"] = None
+                active_miners[user]["status"] = "В сети (Фарминг)"
 
     def flush(self):
         self.stream.flush()
