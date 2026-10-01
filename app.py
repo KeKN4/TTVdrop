@@ -42,7 +42,7 @@ init_db()
 
 active_miners = {}
 
-# Валидация auth-token и получение данных профиля
+# Валидация токена и получение профиля
 def verify_twitch_token(token: str):
     url = "https://gql.twitch.tv/gql"
     headers = {
@@ -62,63 +62,78 @@ def verify_twitch_token(token: str):
         print(f"[AUTH ERROR] {e}")
     return None, None, None
 
-# Надежное получение списка подписок через приватный контекст currentUser
+# Надежное получение списка подписок по ID пользователя
 def get_user_follows_full(login: str, token: str):
-    url = "https://gql.twitch.tv/gql"
     headers = {
         "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
         "Authorization": f"OAuth {token}",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
 
-    streamers = {}
+    streamers = []
 
-    # Запрос 1: Достаем каналы, на которые подписан пользователь (через currentUser)
-    query_follows = """
-    query {
-      currentUser {
-        follows(first: 100) {
-          edges {
-            node {
-              login
-              displayName
-              profileImageURL(width: 70)
-              stream {
-                id
-                type
+    # 1. Достаем точный ID пользователя через currentUser
+    user_id = None
+    try:
+        id_resp = requests.post(
+            "https://gql.twitch.tv/gql",
+            json={"query": "query { currentUser { id } }"},
+            headers=headers,
+            timeout=6
+        )
+        if id_resp.status_code == 200:
+            user_id = id_resp.json().get("data", {}).get("currentUser", {}).get("id")
+            print(f"[DEBUG USER ID] {user_id}")
+    except Exception as e:
+        print(f"[ID ERROR] {e}")
+
+    # 2. Запрашиваем подписки напрямую по ID пользователя
+    if user_id:
+        gql_query = """
+        query($userId: ID!) {
+          user(id: $userId) {
+            follows(first: 100) {
+              edges {
+                node {
+                  login
+                  displayName
+                  profileImageURL(width: 70)
+                  stream {
+                    id
+                  }
+                }
               }
             }
           }
         }
-      }
-    }
-    """
-
-    try:
-        resp = requests.post(url, json={"query": query_follows}, headers=headers, timeout=8)
-        print(f"[GQL CURRENT_USER STATUS] {resp.status_code}")
-        if resp.status_code == 200:
-            res_data = resp.json()
-            if isinstance(res_data, dict):
-                c_user = res_data.get("data", {}).get("currentUser") or {}
-                edges = (c_user.get("follows") or {}).get("edges") or []
-                print(f"[DEBUG EDGES COUNT] {len(edges)}")
+        """
+        try:
+            resp = requests.post(
+                "https://gql.twitch.tv/gql",
+                json={"query": gql_query, "variables": {"userId": user_id}},
+                headers=headers,
+                timeout=8
+            )
+            print(f"[USER_ID GQL STATUS] {resp.status_code}")
+            if resp.status_code == 200:
+                res_json = resp.json()
+                edges = res_json.get("data", {}).get("user", {}).get("follows", {}).get("edges", [])
+                print(f"[USER_ID EDGES] {len(edges)}")
                 for edge in edges:
                     node = edge.get("node")
                     if node and node.get("login"):
-                        ch_login = node["login"]
-                        streamers[ch_login] = {
-                            "login": ch_login,
-                            "name": node.get("displayName") or ch_login,
+                        streamers.append({
+                            "login": node["login"],
+                            "name": node.get("displayName") or node["login"],
                             "avatar": node.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
                             "is_live": node.get("stream") is not None
-                        }
-    except Exception as ex:
-        print(f"[GQL CURRENT_USER ERROR] {ex}")
+                        })
+        except Exception as ex:
+            print(f"[USER_ID GQL EXCEPTION] {ex}")
 
-    # Запрос 2: Дополняем стримерами из боковой панели (онлайн стримеры)
-    try:
-        query_live = """
+    # 3. Резервный запрос: активные стримы из бокового меню
+    if not streamers:
+        gql_sidebar = """
         query {
           currentUser {
             followedLiveUsers {
@@ -131,32 +146,26 @@ def get_user_follows_full(login: str, token: str):
           }
         }
         """
-        resp_live = requests.post(url, json={"query": query_live}, headers=headers, timeout=6)
-        if resp_live.status_code == 200:
-            res_live = resp_live.json()
-            if isinstance(res_live, dict):
-                nodes = (res_live.get("data", {}).get("currentUser", {}) or {}).get("followedLiveUsers", {}).get("nodes") or []
+        try:
+            sb_resp = requests.post("https://gql.twitch.tv/gql", json={"query": gql_sidebar}, headers=headers, timeout=6)
+            if sb_resp.status_code == 200:
+                nodes = sb_resp.json().get("data", {}).get("currentUser", {}).get("followedLiveUsers", {}).get("nodes", [])
                 for n in nodes:
                     if n and n.get("login"):
-                        ch_login = n["login"]
-                        if ch_login in streamers:
-                            streamers[ch_login]["is_live"] = True
-                        else:
-                            streamers[ch_login] = {
-                                "login": ch_login,
-                                "name": n.get("displayName") or ch_login,
-                                "avatar": n.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
-                                "is_live": True
-                            }
-    except Exception as ex:
-        print(f"[GQL LIVE ERROR] {ex}")
+                        streamers.append({
+                            "login": n["login"],
+                            "name": n.get("displayName") or n["login"],
+                            "avatar": n.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
+                            "is_live": True
+                        })
+        except Exception as ex:
+            print(f"[SIDEBAR EXCEPTION] {ex}")
 
-    res = list(streamers.values())
-    res.sort(key=lambda x: (not x["is_live"], x["name"].lower()))
-    print(f"[FINAL LOADED STREAMERS] Count: {len(res)}")
-    return res
+    streamers.sort(key=lambda x: (not x["is_live"], x["name"].lower()))
+    print(f"[STREAMERS RESULT] Total: {len(streamers)}")
+    return streamers
 
-# Фоновый поток майнера
+# Поток майнера
 def worker_thread(username: str, auth_token: str, streamers: list):
     try:
         active_miners[username]["status"] = "В сети (Фарминг)"
