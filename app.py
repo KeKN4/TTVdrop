@@ -1,10 +1,10 @@
 import os
 import re
+import sys
 import secrets
 import sqlite3
 import threading
 import signal
-import logging
 import requests
 from fastapi import FastAPI, Request, Form, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -43,26 +43,29 @@ init_db()
 
 active_miners = {}
 
-# Перехватчик логов майнера для получения кода активации twitch.tv/activate
-class MinerLogHandler(logging.Handler):
-    def __init__(self, username):
-        super().__init__()
-        self.username = username
+# Перехватчик системного вывода stdout для отлова кода активации
+class OutputInterceptor:
+    def __init__(self, original_stdout):
+        self.original_stdout = original_stdout
 
-    def emit(self, record):
-        msg = record.getMessage()
-        # Ловим код активации
-        if "enter this code:" in msg:
-            code_match = re.search(r'enter this code:\s*([A-Z0-9]+)', msg, re.IGNORECASE)
-            if code_match:
-                code = code_match.group(1).strip()
-                if self.username in active_miners:
-                    active_miners[self.username]["auth_code"] = code
-                    active_miners[self.username]["status"] = "Требуется активация"
-        elif "You are now logged in" in msg or "Logged in successfully" in msg:
-            if self.username in active_miners:
-                active_miners[self.username]["auth_code"] = None
-                active_miners[self.username]["status"] = "В сети (Фарминг)"
+    def write(self, text):
+        self.original_stdout.write(text)
+        if "enter this code:" in text:
+            match = re.search(r'enter this code:\s*([A-Z0-9]+)', text, re.IGNORECASE)
+            if match:
+                code = match.group(1).strip()
+                for user in active_miners:
+                    active_miners[user]["auth_code"] = code
+                    active_miners[user]["status"] = "Требуется активация"
+        elif "You are now logged in" in text or "Logged in successfully" in text:
+            for user in active_miners:
+                active_miners[user]["auth_code"] = None
+                active_miners[user]["status"] = "В сети (Фарминг)"
+
+    def flush(self):
+        self.original_stdout.flush()
+
+sys.stdout = OutputInterceptor(sys.stdout)
 
 def verify_twitch_token(token: str):
     url = "https://gql.twitch.tv/gql"
@@ -136,11 +139,6 @@ def worker_thread(username: str, auth_token: str, streamers: list):
     try:
         signal.signal = lambda *args, **kwargs: None
 
-        # Подключаем перехватчик логов
-        logger = logging.getLogger()
-        handler = MinerLogHandler(username)
-        logger.addHandler(handler)
-
         active_miners[username]["status"] = "Запуск (Ожидание)"
         
         twitch_miner = TwitchChannelPointsMiner(
@@ -159,10 +157,8 @@ def worker_thread(username: str, auth_token: str, streamers: list):
                         s.cookies.set("auth-token", auth_token)
 
         active_miners[username]["miner"] = twitch_miner
-        
         channels_to_mine = [s.strip().lower() for s in streamers if s.strip()]
         
-        # Запускаем майнинг без analytics
         twitch_miner.mine(channels_to_mine)
         
     except Exception as e:
