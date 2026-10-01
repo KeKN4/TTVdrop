@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Steam Login — TTV Dropper</title>
+    <style>
+        :root {
+            --steam-bg: #4c5844;
+            --steam-dark: #3a4334;
+            --steam-darker: #282e24;
+            --steam-light: #5e6d54;
+            --steam-border-hi: #6d7f62;
+            --steam-border-lo: #272d22;
+            --steam-text: #c4cebe;
+            --steam-text-bright: #e1e9db;
+            --steam-text-muted: #8d9885;
+            --steam-accent: #a3b899;
+        }
+        * { box-sizing: border-box; user-select: none; }
+        body {
+            font-family: "Tahoma", "Segoe UI", Arial, sans-serif;
+            background-color: #1a1e17;
+            color: var(--steam-text);
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            font-size: 11px;
+        }
+        .login-dialog {
+            width: 380px;
+            background-color: var(--steam-bg);
+            border: 1px solid var(--steam-border-hi);
+            box-shadow: 2px 2px 0px var(--steam-border-lo), inset 1px 1px 0px var(--steam-light);
+            padding: 2px;
+        }
+        .dialog-title {
+            background: linear-gradient(to right, #434e3c, #3a4434);
+            padding: 5px 8px;
+            font-weight: bold;
+            color: var(--steam-text-bright);
+            display: flex;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--steam-border-lo);
+        }
+        .dialog-body {
+            padding: 16px;
+            background-color: var(--steam-dark);
+            margin: 2px;
+            border: 1px solid var(--steam-border-lo);
+        }
+        label { display: block; margin-bottom: 4px; color: var(--steam-text); }
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            background-color: var(--steam-darker);
+            border: 1px solid var(--steam-border-lo);
+            box-shadow: inset 1px 1px 2px #000;
+            color: #fff;
+            padding: 6px 8px;
+            margin-bottom: 12px;
+            font-size: 11px;
+            outline: none;
+        }
+        .btn-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+        .steam-btn {
+            background-color: var(--steam-bg);
+            border-top: 1px solid var(--steam-border-hi);
+            border-left: 1px solid var(--steam-border-hi);
+            border-right: 1px solid var(--steam-border-lo);
+            border-bottom: 1px solid var(--steam-border-lo);
+            color: var(--steam-text-bright);
+            padding: 5px 16px;
+            font-weight: bold;
+            font-size: 11px;
+            cursor: pointer;
+        }
+        .steam-btn:hover { background-color: var(--steam-light); }
+        .steam-btn:active {
+            border-top: 1px solid var(--steam-border-lo);
+            border-left: 1px solid var(--steam-border-lo);
+            border-right: 1px solid var(--steam-border-hi);
+            border-bottom: 1px solid var(--steam-border-hi);
+        }
+    </style>
+</head>
+<body>
+    <div class="login-dialog">
+        <div class="dialog-title">
+            <span>Steam Login</span>
+            <span>✕</span>
+        </div>
+        <div class="dialog-body">
+            <form action="/login" method="POST">
+                <label>Twitch Account Name:</label>
+                <input type="text" name="username" required autocomplete="off">
+
+                <label>Password:</label>
+                <input type="password" name="password" required>
+
+                <div class="btn-row">
+                    <button type="submit" class="steam-btn">Login</button>
+                    <button type="button" class="steam-btn" onclick="window.close()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
