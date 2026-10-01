@@ -1,4 +1,3 @@
-cat << 'EOF' > app.py
 import os
 import threading
 from fastapi import FastAPI, Request, Form
