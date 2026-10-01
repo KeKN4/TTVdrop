@@ -2,6 +2,7 @@ import os
 import secrets
 import sqlite3
 import threading
+import signal
 import requests
 from fastapi import FastAPI, Request, Form, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -61,7 +62,6 @@ def verify_twitch_token(token: str):
         print(f"[AUTH ERROR] {e}")
     return None, None, None
 
-# Быстрое пакетное получение аватарок через GraphQL без лагов
 def get_channels_avatars_bulk(logins: list, token: str):
     default_avatar = "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png"
     if not logins:
@@ -73,8 +73,11 @@ def get_channels_avatars_bulk(logins: list, token: str):
         "Authorization": f"OAuth {token}" if token else ""
     }
     
-    # Запрос пачки логинов в 1 быстрый запрос
-    logins_json = "[" + ",".join([f'"{l.strip().lower()}"' for l in logins if l.strip()]) + "]"
+    clean_logins = [l.strip().lower() for l in logins if l.strip()]
+    if not clean_logins:
+        return {}
+        
+    logins_json = "[" + ",".join([f'"{l}"' for l in clean_logins]) + "]"
     query = f"""
     query {{
       users(logins: {logins_json}) {{
@@ -99,12 +102,10 @@ def get_channels_avatars_bulk(logins: list, token: str):
     except Exception as e:
         print(f"[BULK AVATAR ERROR] {e}")
 
-    # Заполняем дефолтами тех, кого Twitch не отдал
-    for l in logins:
-        clean_l = l.strip().lower()
-        if clean_l and clean_l not in avatars_map:
-            avatars_map[clean_l] = {
-                "name": clean_l,
+    for l in clean_logins:
+        if l not in avatars_map:
+            avatars_map[l] = {
+                "name": l,
                 "avatar": default_avatar
             }
             
@@ -112,6 +113,9 @@ def get_channels_avatars_bulk(logins: list, token: str):
 
 def worker_thread(username: str, auth_token: str, streamers: list):
     try:
+        # Обходим ограничение signal в фоновом потоке
+        signal.signal = lambda *args, **kwargs: None
+
         active_miners[username]["status"] = "В сети (Фарминг)"
         twitch_miner = TwitchChannelPointsMiner(
             username=username,
@@ -214,7 +218,6 @@ async def dashboard(request: Request):
         saved_streamers = [s.strip().lower() for s in row[0].split(",")] if row and row[0] else []
         auth_token = row[1] if row else ""
 
-    # Мгновенная пакетная загрузка аватарок в 1 запрос без блокировок
     avatars_map = get_channels_avatars_bulk(saved_streamers, auth_token)
     streamers = []
     for s_login in saved_streamers:
