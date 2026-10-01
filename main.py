@@ -1,238 +1,287 @@
 import os
-import sys
-import json
-import pickle
-import queue
-import logging
-import traceback
+import secrets
+import sqlite3
 import threading
-import asyncio
-from collections import deque
-from aiohttp import web
+import requests
+from fastapi import FastAPI, Request, Form, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+import uvicorn
+
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
+from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer
+from TwitchChannelPointsMiner.classes.Settings import Priority
 
-CONFIG_FILE = "config.json"
-log_buffer = deque(maxlen=60)
+app = FastAPI(title="TTV Drop Multi-User")
+templates = Jinja2Templates(directory="templates")
 
-class WebLogHandler(logging.Handler):
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            log_buffer.append(msg)
-        except Exception:
-            pass
+DB_PATH = "storage.db"
 
-root_logger = logging.getLogger()
-handler = WebLogHandler()
-handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s", datefmt="%H:%M:%S"))
-root_logger.addHandler(handler)
+def init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                display_name TEXT,
+                avatar_url TEXT,
+                auth_token TEXT,
+                selected_streamers TEXT,
+                status TEXT DEFAULT 'Остановлен'
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                username TEXT
+            )
+        """)
+        conn.commit()
 
-task_queue = queue.Queue()
-current_miner = None
+init_db()
 
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"username": "", "auth_token": "", "streamers": []}
+active_miners = {}
 
-def save_config(data):
+def verify_twitch_token(token: str):
+    url = "https://gql.twitch.tv/gql"
+    headers = {
+        "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
+        "Authorization": f"OAuth {token}"
+    }
+    payload = {"query": "query { currentUser { id login displayName profileImageURL(width: 70) } }"}
     try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        resp = requests.post(url, json=payload, headers=headers, timeout=7)
+        if resp.status_code == 200:
+            res_json = resp.json()
+            if isinstance(res_json, dict):
+                user = (res_json.get("data") or {}).get("currentUser")
+                if user and user.get("login"):
+                    return user["login"], user.get("displayName", user["login"]), user.get("profileImageURL", "")
     except Exception as e:
-        print(f"[SYSTEM] Ошибка сохранения конфига: {e}", flush=True)
+        print(f"[AUTH ERROR] {e}")
+    return None, None, None
 
-config_data = load_config()
+def get_channel_avatar(channel_login: str, token: str):
+    default_avatar = "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png"
+    if not channel_login:
+        return default_avatar
+    try:
+        headers = {
+            "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
+            "Authorization": f"OAuth {token}"
+        }
+        resp = requests.get(f"https://api.twitch.tv/helix/users?login={channel_login.strip().lower()}", headers=headers, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json().get("data", [])
+            if data:
+                return data[0].get("profile_image_url") or default_avatar
+    except Exception as e:
+        print(f"[AVATAR FETCH ERROR] {e}")
+    return default_avatar
 
-status = {
-    "running": False,
-    "username": config_data.get("username", ""),
-    "streamers": config_data.get("streamers", []),
-    "last_error": None
-}
+def worker_thread(username: str, auth_token: str, streamers: list):
+    try:
+        active_miners[username]["status"] = "В сети (Фарминг)"
+        twitch_miner = TwitchChannelPointsMiner(
+            username=username,
+            enable_analytics=False,
+            disable_ssl_cert_verification=True
+        )
+        if hasattr(twitch_miner, "twitch"):
+            t = twitch_miner.twitch
+            for s_attr in ["_session", "session"]:
+                if hasattr(t, s_attr):
+                    s = getattr(t, s_attr)
+                    if hasattr(s, "cookies"):
+                        s.cookies.set("auth-token", auth_token, domain=".twitch.tv")
+                        s.cookies.set("auth-token", auth_token)
 
-HTML_PAGE = """
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Twitch Miner Control</title>
-    <style>
-        body { font-family: system-ui, sans-serif; background: #0f0e17; color: #fffffe; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
-        .card { background: #2e2f3e; padding: 2rem; border-radius: 12px; width: 100%; max-width: 650px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
-        h2 { margin-top: 0; color: #a786df; }
-        label { display: block; margin: 12px 0 4px; font-size: 0.9rem; }
-        input, textarea { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #4a4b63; background: #1f1f2e; color: #fff; box-sizing: border-box; }
-        button { width: 100%; margin-top: 18px; padding: 12px; border: none; border-radius: 6px; background: #7f5af0; color: #fff; font-weight: bold; cursor: pointer; transition: 0.2s; }
-        button:hover { background: #6b46c1; }
-        .status { padding: 8px 12px; border-radius: 6px; margin-bottom: 16px; font-size: 0.85rem; font-weight: bold; }
-        .status.on { background: #2cb67d22; color: #2cb67d; border: 1px solid #2cb67d; }
-        .status.off { background: #e5317022; color: #e53170; border: 1px solid #e53170; }
-        .logs-box { background: #121217; border: 1px solid #3d3e52; border-radius: 6px; padding: 12px; font-family: monospace; font-size: 0.78rem; height: 200px; overflow-y: auto; white-space: pre-wrap; margin-top: 18px; color: #a0aec0; }
-        .hint { font-size: 0.75rem; color: #a0aec0; margin-top: 2px; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>Управление фармом</h2>
-        <div id="statusBadge" class="status {status_class}">Статус: {status_text}</div>
+        active_miners[username]["miner"] = twitch_miner
+        streamer_objs = [Streamer(s.strip(), priority=Priority.HIGH) for s in streamers if s.strip()]
+        twitch_miner.analytics(host="0.0.0.0", port=0, refresh=5)
+        twitch_miner.mine(streamer_objs)
+    except Exception as e:
+        if username in active_miners:
+            active_miners[username]["status"] = f"Ошибка: {str(e)[:35]}"
+
+def get_current_user_info(request: Request):
+    token = request.cookies.get("steam_session")
+    if not token:
+        return None, None, None
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT u.username, u.display_name, u.avatar_url FROM sessions s JOIN users u ON s.username = u.username WHERE s.token = ?", (token,))
+        row = cursor.fetchone()
+        return (row[0], row[1], row[2]) if row else (None, None, None)
+
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    user, _, _ = get_current_user_info(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return RedirectResponse(url="/dashboard")
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    user, _, _ = get_current_user_info(request)
+    if user:
+        return RedirectResponse(url="/dashboard")
+    return templates.TemplateResponse(request=request, name="login.html", context={"error": None})
+
+@app.post("/login")
+async def do_login(request: Request, response: Response, auth_token: str = Form(...)):
+    auth_token = auth_token.strip().replace("oauth:", "").replace("Bearer ", "")
+    
+    username, display_name, avatar_url = verify_twitch_token(auth_token)
+    if not username:
+        return templates.TemplateResponse(
+            request=request, 
+            name="login.html", 
+            context={"error": "Неверный auth-token. Twitch отклонил запрос."}
+        )
+
+    session_token = secrets.token_hex(24)
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO users (username, display_name, avatar_url, auth_token) 
+            VALUES (?, ?, ?, ?) 
+            ON CONFLICT(username) DO UPDATE SET 
+                display_name=excluded.display_name,
+                avatar_url=excluded.avatar_url,
+                auth_token=excluded.auth_token
+        """, (username, display_name, avatar_url, auth_token))
+        cursor.execute("INSERT OR REPLACE INTO sessions (token, username) VALUES (?, ?)", (session_token, username))
+        conn.commit()
+
+    res = RedirectResponse(url="/dashboard", status_code=303)
+    res.set_cookie(key="steam_session", value=session_token, httponly=True)
+    return res
+
+@app.get("/logout")
+async def logout(request: Request):
+    token = request.cookies.get("steam_session")
+    if token:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
+            conn.commit()
+    res = RedirectResponse(url="/login", status_code=303)
+    res.delete_cookie("steam_session")
+    return res
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    user, display_name, avatar_url = get_current_user_info(request)
+    if not user:
+        return RedirectResponse(url="/login")
+
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT selected_streamers, auth_token FROM users WHERE username = ?", (user,))
+        row = cursor.fetchone()
+        saved_streamers = [s.strip().lower() for s in row[0].split(",")] if row and row[0] else []
+        auth_token = row[1] if row else ""
+
+    streamers = []
+    for s_login in saved_streamers:
+        if s_login:
+            avatar = get_channel_avatar(s_login, auth_token)
+            streamers.append({
+                "login": s_login,
+                "name": s_login,
+                "avatar": avatar,
+                "is_live": False
+            })
+
+    status = active_miners.get(user, {}).get("status", "Остановлен")
+    is_running = user in active_miners and "miner" in active_miners[user]
+
+    return templates.TemplateResponse(
+        request=request,
+        name="dashboard.html",
+        context={
+            "username": user,
+            "display_name": display_name or user,
+            "avatar_url": avatar_url,
+            "streamers": streamers,
+            "selected_channels": saved_streamers,
+            "status": status,
+            "is_running": is_running
+        }
+    )
+
+@app.post("/add_channel")
+async def add_channel(request: Request, new_channel: str = Form(...)):
+    user, _, _ = get_current_user_info(request)
+    if not user:
+        return RedirectResponse(url="/login")
+
+    new_channel = new_channel.strip().lower().replace("@", "")
+    if new_channel:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT selected_streamers FROM users WHERE username = ?", (user,))
+            row = cursor.fetchone()
+            saved = [s.strip().lower() for s in row[0].split(",")] if row and row[0] else []
+            
+            if new_channel not in saved:
+                saved.append(new_channel)
+                cursor.execute("UPDATE users SET selected_streamers = ? WHERE username = ?", (",".join(saved), user))
+                conn.commit()
+
+    return RedirectResponse(url="/dashboard", status_code=303)
+
+@app.post("/remove_channel")
+async def remove_channel(request: Request, channel: str = Form(...)):
+    user, _, _ = get_current_user_info(request)
+    if not user:
+        return RedirectResponse(url="/login")
+
+    channel = channel.strip().lower()
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT selected_streamers FROM users WHERE username = ?", (user,))
+        row = cursor.fetchone()
+        saved = [s.strip().lower() for s in row[0].split(",")] if row and row[0] else []
         
-        <form method="POST" action="/start">
-            <label>Ник Twitch:</label>
-            <input type="text" name="username" value="{username}" placeholder="твой_ник" required>
+        if channel in saved:
+            saved.remove(channel)
+            cursor.execute("UPDATE users SET selected_streamers = ? WHERE username = ?", (",".join(saved), user))
+            conn.commit()
 
-            <label>Auth Token (кука auth-token):</label>
-            <input type="password" name="auth_token" placeholder="{token_placeholder}">
-            <div class="hint">Оставь пустым, если токен уже сохранялся ранее</div>
+    return RedirectResponse(url="/dashboard", status_code=303)
 
-            <label>Стримеры (через запятую):</label>
-            <textarea name="streamers" rows="3" placeholder="streamer1, streamer2, streamer3" required>{streamers}</textarea>
+@app.post("/start_miner")
+async def start_miner(request: Request):
+    user, _, _ = get_current_user_info(request)
+    if not user:
+        return RedirectResponse(url="/login")
 
-            <button type="submit">Применить изменения</button>
-        </form>
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT selected_streamers, auth_token FROM users WHERE username = ?", (user,))
+        row = cursor.fetchone()
+        chosen_channels = [s.strip() for s in row[0].split(",")] if row and row[0] else []
+        auth_token = row[1] if row else ""
 
-        <label style="margin-top: 20px;">Логи (обновляются в реальном времени):</label>
-        <div class="logs-box" id="logs">{logs}</div>
-    </div>
+    if user in active_miners:
+        del active_miners[user]
 
-    <script>
-        async function updateLogs() {
-            try {
-                const res = await fetch('/api/logs');
-                if (res.ok) {
-                    const data = await res.json();
-                    const box = document.getElementById("logs");
-                    const isAtBottom = box.scrollHeight - box.clientHeight <= box.scrollTop + 50;
-                    box.textContent = data.logs.join('\\n') || "Логи пока пусты...";
-                    if (isAtBottom) {
-                        box.scrollTop = box.scrollHeight;
-                    }
-                    
-                    const badge = document.getElementById("statusBadge");
-                    badge.className = "status " + (data.running ? "on" : "off");
-                    badge.textContent = "Статус: " + (data.running ? "Работает" : "Остановлен");
-                }
-            } catch (e) {}
-        }
-        setInterval(updateLogs, 3000);
-        document.getElementById("logs").scrollTop = document.getElementById("logs").scrollHeight;
-    </script>
-</body>
-</html>
-"""
+    if chosen_channels and auth_token:
+        t = threading.Thread(target=worker_thread, args=(user, auth_token, chosen_channels), daemon=True)
+        active_miners[user] = {"thread": t, "status": "Запуск воркера..."}
+        t.start()
 
-def save_cookie_file(username, auth_token):
-    os.makedirs("cookies", exist_ok=True)
-    cookie_path = os.path.join("cookies", f"{username}.pkl")
-    cookie_data = [
-        {
-            "name": "auth-token",
-            "value": auth_token,
-            "domain": ".twitch.tv",
-            "path": "/",
-            "secure": True,
-            "httpOnly": False
-        }
-    ]
-    with open(cookie_path, "wb") as f:
-        pickle.dump(cookie_data, f)
+    return RedirectResponse(url="/dashboard", status_code=303)
 
-async def handle_get(request):
-    is_on = status["running"]
-    logs_text = "\n".join(log_buffer) if log_buffer else "Логи пока пусты..."
-    token_saved = bool(config_data.get("auth_token"))
-    placeholder = "Токен уже сохранен (введи только если нужно сменить)" if token_saved else "Вставь сюда auth-token"
-
-    rendered = HTML_PAGE.replace("{status_class}", "on" if is_on else "off") \
-                        .replace("{status_text}", "Работает" if is_on else "Остановлен") \
-                        .replace("{username}", config_data.get("username", "")) \
-                        .replace("{token_placeholder}", placeholder) \
-                        .replace("{streamers}", ", ".join(config_data.get("streamers", []))) \
-                        .replace("{logs}", logs_text)
-    return web.Response(text=rendered, content_type="text/html")
-
-async def handle_api_logs(request):
-    return web.json_response({
-        "running": status["running"],
-        "logs": list(log_buffer)
-    })
-
-async def handle_post(request):
-    global current_miner, config_data
-    data = await request.post()
-    username = data.get("username", "").strip()
-    auth_token = data.get("auth_token", "").strip()
-    streamers_raw = data.get("streamers", "")
-    streamers = [s.strip() for s in streamers_raw.split(",") if s.strip()]
-
-    # Если поле токена пустое, берем ранее сохраненный
-    if not auth_token:
-        auth_token = config_data.get("auth_token", "")
-
-    if username and auth_token and streamers:
-        config_data["username"] = username
-        config_data["auth_token"] = auth_token
-        config_data["streamers"] = streamers
-        save_config(config_data)
-
-        if current_miner is not None:
-            try:
-                print("[SYSTEM] Перезапуск майнера под обновленный список...", flush=True)
-                current_miner.end()
-            except Exception as e:
-                print(f"[SYSTEM] Ошибка при остановке: {e}", flush=True)
-
-        task_queue.put((username, auth_token, streamers))
-    else:
-        print("[WEB] Не хватает данных для запуска (возможно, нет auth_token)", flush=True)
-
-    return web.HTTPFound("/")
-
-def run_web_server():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    app = web.Application()
-    app.router.add_get("/", handle_get)
-    app.router.add_get("/api/logs", handle_api_logs)
-    app.router.add_post("/start", handle_post)
-    port = int(os.environ.get("PORT", 10000))
-    runner = web.AppRunner(app)
-    loop.run_until_complete(runner.setup())
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    loop.run_until_complete(site.start())
-    loop.run_forever()
+@app.post("/stop_miner")
+async def stop_miner(request: Request):
+    user, _, _ = get_current_user_info(request)
+    if user and user in active_miners:
+        del active_miners[user]
+    return RedirectResponse(url="/dashboard", status_code=303)
 
 if __name__ == "__main__":
-    server_thread = threading.Thread(target=run_web_server, daemon=True)
-    server_thread.start()
-
-    # Автостарт при перезапуске сервера (если конфиг уже был заполнен)
-    if config_data.get("username") and config_data.get("auth_token") and config_data.get("streamers"):
-        print("[MAIN] Найден сохраненный конфиг, автозапуск...", flush=True)
-        task_queue.put((config_data["username"], config_data["auth_token"], config_data["streamers"]))
-
-    while True:
-        try:
-            username, auth_token, streamers = task_queue.get()
-            status["running"] = True
-            status["username"] = username
-            status["streamers"] = streamers
-
-            save_cookie_file(username, auth_token)
-
-            current_miner = TwitchChannelPointsMiner(username=username)
-            print(f"[MAIN] Старт отслеживания для {len(streamers)} каналов: {streamers}", flush=True)
-            current_miner.mine(streamers)
-
-        except Exception as err:
-            err_msg = traceback.format_exc()
-            print(f"[MAIN ERROR]\n{err_msg}", flush=True)
-        finally:
-            current_miner = None
-            if task_queue.empty():
-                status["running"] = False
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
