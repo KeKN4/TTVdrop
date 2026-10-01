@@ -53,108 +53,118 @@ def verify_twitch_token(token: str):
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=7)
         if resp.status_code == 200:
-            user = resp.json().get("data", {}).get("currentUser")
-            if user and user.get("login"):
-                return user["login"], user.get("displayName", user["login"]), user.get("profileImageURL", "")
+            res_json = resp.json()
+            if isinstance(res_json, dict):
+                user = res_json.get("data", {}).get("currentUser")
+                if user and user.get("login"):
+                    return user["login"], user.get("displayName", user["login"]), user.get("profileImageURL", "")
     except Exception as e:
         print(f"[AUTH ERROR] {e}")
     return None, None, None
 
-# Надежное получение списка подписок (GQL User Follows + Helix fallback с Bearer)
+# Надежное получение списка подписок через публичный GQL
 def get_user_follows_full(login: str, token: str):
     url = "https://gql.twitch.tv/gql"
-    headers_gql = {
+    headers = {
         "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
-        "Authorization": f"OAuth {token}",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
 
-    streamers = {}
-
-    # Способ 1: Прямой GQL запрос списка каналов пользователя
-    query_follows = """
-    query {
-      currentUser {
-        followedLiveUsers {
-          nodes {
-            login
-            displayName
-            profileImageURL(width: 70)
-            stream {
-              id
+    # Запрашиваем публичный список подписок профиля
+    query = """
+    query GetFollows($login: String!) {
+      user(login: $login) {
+        follows(first: 100) {
+          edges {
+            node {
+              login
+              displayName
+              profileImageURL(width: 70)
+              stream {
+                id
+                type
+              }
             }
           }
         }
       }
     }
     """
-    try:
-        resp = requests.post(url, json={"query": query_follows}, headers=headers_gql, timeout=7)
-        if resp.status_code == 200:
-            nodes = resp.json().get("data", {}).get("currentUser", {}).get("followedLiveUsers", {}).get("nodes", [])
-            for node in nodes:
-                if node and node.get("login"):
-                    streamers[node["login"]] = {
-                        "login": node["login"],
-                        "name": node.get("displayName") or node["login"],
-                        "avatar": node.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
-                        "is_live": True
-                    }
-    except Exception as ex:
-        print(f"[GQL LIVE ERROR] {ex}")
 
-    # Способ 2: Helix API с корректным Bearer заголовком
-    headers_helix = {
-        "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
-        "Authorization": f"Bearer {token}"
-    }
+    streamers = {}
 
     try:
-        u_resp = requests.get("https://api.twitch.tv/helix/users", headers=headers_helix, timeout=6)
-        print(f"[HELIX USER CHECK] Status: {u_resp.status_code}")
+        payload = {
+            "query": query,
+            "variables": {"login": login}
+        }
+        resp = requests.post(url, json=payload, headers=headers, timeout=8)
+        print(f"[GQL QUERY STATUS] {resp.status_code}")
         
-        if u_resp.status_code == 200:
-            user_id = u_resp.json()["data"][0]["id"]
-            f_resp = requests.get(
-                f"https://api.twitch.tv/helix/channels/followed?user_id={user_id}&first=100",
-                headers=headers_helix,
-                timeout=8
-            )
-            print(f"[HELIX FOLLOWS] Status: {f_resp.status_code}")
-            
-            if f_resp.status_code == 200:
-                f_data = f_resp.json().get("data", [])
-                broadcaster_ids = [item["broadcaster_id"] for item in f_data if "broadcaster_id" in item]
-
-                avatars = {}
-                live_map = {}
-                if broadcaster_ids:
-                    query_ids = "&id=".join(broadcaster_ids[:100])
-                    users_info_resp = requests.get(f"https://api.twitch.tv/helix/users?id={query_ids}", headers=headers_helix, timeout=7)
-                    if users_info_resp.status_code == 200:
-                        for u in users_info_resp.json().get("data", []):
-                            avatars[u["login"]] = u.get("profile_image_url")
-
-                    streams_resp = requests.get(f"https://api.twitch.tv/helix/streams?user_id={'&user_id='.join(broadcaster_ids[:100])}", headers=headers_helix, timeout=7)
-                    if streams_resp.status_code == 200:
-                        for s in streams_resp.json().get("data", []):
-                            live_map[s["user_login"]] = True
-
-                for item in f_data:
-                    ch_login = item.get("broadcaster_login")
-                    ch_name = item.get("broadcaster_name") or ch_login
-                    avatar = avatars.get(ch_login) or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png"
-                    streamers[ch_login] = {
-                        "login": ch_login,
-                        "name": ch_name,
-                        "avatar": avatar,
-                        "is_live": live_map.get(ch_login, False)
-                    }
+        if resp.status_code == 200:
+            res_data = resp.json()
+            if isinstance(res_data, dict):
+                data = res_data.get("data")
+                if data and isinstance(data, dict):
+                    user_obj = data.get("user")
+                    if user_obj and isinstance(user_obj, dict):
+                        follows_obj = user_obj.get("follows")
+                        if follows_obj and isinstance(follows_obj, dict):
+                            edges = follows_obj.get("edges") or []
+                            for edge in edges:
+                                node = edge.get("node")
+                                if node and node.get("login"):
+                                    ch_login = node["login"]
+                                    streamers[ch_login] = {
+                                        "login": ch_login,
+                                        "name": node.get("displayName") or ch_login,
+                                        "avatar": node.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
+                                        "is_live": node.get("stream") is not None
+                                    }
     except Exception as ex:
-        print(f"[HELIX ERROR] {ex}")
+        print(f"[GQL FETCH EXCEPTION] {ex}")
+
+    # Если профиль скрыт или список пуст, достаем живых стримеров через currentUser
+    if not streamers and token:
+        try:
+            auth_headers = {
+                "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
+                "Authorization": f"OAuth {token}"
+            }
+            query_live = """
+            query {
+              currentUser {
+                followedLiveUsers {
+                  nodes {
+                    login
+                    displayName
+                    profileImageURL(width: 70)
+                  }
+                }
+              }
+            }
+            """
+            live_resp = requests.post(url, json={"query": query_live}, headers=auth_headers, timeout=6)
+            if live_resp.status_code == 200:
+                l_json = live_resp.json()
+                if isinstance(l_json, dict):
+                    c_user = l_json.get("data", {}).get("currentUser")
+                    if c_user and isinstance(c_user, dict):
+                        nodes = (c_user.get("followedLiveUsers") or {}).get("nodes") or []
+                        for n in nodes:
+                            if n and n.get("login"):
+                                streamers[n["login"]] = {
+                                    "login": n["login"],
+                                    "name": n.get("displayName") or n["login"],
+                                    "avatar": n.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
+                                    "is_live": True
+                                }
+        except Exception as ex:
+            print(f"[LIVE FETCH EXCEPTION] {ex}")
 
     res = list(streamers.values())
     res.sort(key=lambda x: (not x["is_live"], x["name"].lower()))
+    print(f"[FINAL LOADED STREAMERS] Count: {len(res)}")
     return res
 
 # Фоновый поток майнера
