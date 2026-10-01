@@ -174,7 +174,7 @@
             user-select: text;
         }
 
-        input[type="text"], select {
+        input[type="text"] {
             width: 100%;
             background-color: var(--steam-darker);
             border: 1px solid var(--steam-border-lo);
@@ -218,7 +218,6 @@
             border-color: #7b4c4c #2b1717 #2b1717 #7b4c4c;
         }
 
-        /* Таблица каналов в стиле старого Steam Server Browser */
         .steam-table-container {
             background-color: var(--steam-darker);
             border: 1px solid var(--steam-border-lo);
@@ -259,12 +258,13 @@
         }
 
         .channel-avatar {
-            width: 22px;
-            height: 22px;
+            width: 24px;
+            height: 24px;
             border-radius: 50%;
             border: 1px solid var(--steam-border-hi);
             vertical-align: middle;
-            margin-right: 6px;
+            margin-right: 8px;
+            background-color: #1a1e16;
         }
 
         .live-tag {
@@ -322,7 +322,6 @@
             </div>
         </div>
 
-        <!-- Кликабельные вкладки меню -->
         <div class="menu-bar">
             <span class="menu-item active" onclick="switchTab('monitor')">Monitor</span>
             <span class="menu-item" onclick="switchTab('channels')">Active Channels ({{ streamers|length }})</span>
@@ -332,7 +331,6 @@
 
         <div class="content-area">
             
-            <!-- Окно активации кода -->
             <div id="activationBox" class="activation-card">
                 <div style="font-weight: bold; font-size: 13px; color: var(--steam-yellow);">⚠️ ТРЕБУЕТСЯ ПОДТВЕРЖДЕНИЕ ВХОДА TWITCH</div>
                 <div style="margin-top: 6px; font-size: 11px;">
@@ -353,7 +351,7 @@
                 </div>
             </div>
 
-            <!-- Вкладка 1: MONITOR -->
+            <!-- Вкладка Monitor -->
             <div id="tab-monitor" class="tab-content active">
                 <div class="group-box">
                     <div class="group-title">Miner State & Actions</div>
@@ -386,15 +384,15 @@
                 <div class="group-box">
                     <div class="group-title">Mining Engine Console Feed</div>
                     <div class="console-box">
-                        [Engine] Initializing Twitch Channel Points Miner v2.0.7...<br>
-                        [Engine] Target active workers loaded: {{ streamers|length }} streamer(s).<br>
-                        [Session] User @{{ username }} verified via GQL.<br>
-                        [Status] State check: {{ status }}
+                        [Engine] Twitch Channel Points Miner v2 initialized.<br>
+                        [Engine] Target active workers: {{ streamers|length }} channel(s).<br>
+                        [Session] User @{{ username }} authenticated via GQL.<br>
+                        [Status] Current state: {{ status }}
                     </div>
                 </div>
             </div>
 
-            <!-- Вкладка 2: ACTIVE CHANNELS С БАЛЛАМИ И СТАТИСТИКОЙ -->
+            <!-- Вкладка Active Channels -->
             <div id="tab-channels" class="tab-content">
                 <div class="group-box">
                     <div class="group-title">Followed & Farm Targets Database</div>
@@ -415,7 +413,7 @@
                                     {% for s in streamers %}
                                     <tr>
                                         <td>
-                                            <img src="{{ s.avatar }}" class="channel-avatar" alt="">
+                                            <img src="{{ s.avatar }}" class="channel-avatar" alt="" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'70\' height=\'70\'><rect width=\'70\' height=\'70\' fill=\'%233a4334\'/><circle cx=\'35\' cy=\'28\' r=\'14\' fill=\'%236d7f62\'/><ellipse cx=\'35\' cy=\'56\' rx=\'22\' ry=\'14\' fill=\'%236d7f62\'/></svg>'">
                                             <b>{{ s.name }}</b>
                                         </td>
                                         <td>
@@ -439,7 +437,7 @@
                                 {% else %}
                                     <tr>
                                         <td colspan="6" style="text-align: center; color: var(--steam-text-muted); padding: 20px;">
-                                            No target channels added. Go to Monitor tab to add your first channel.
+                                            Список каналов пуст. Добавьте стримеров на вкладке Monitor.
                                         </td>
                                     </tr>
                                 {% endif %}
@@ -449,39 +447,29 @@
                 </div>
             </div>
 
-            <!-- Вкладка 3: SETTINGS -->
+            <!-- Вкладка Settings (без непонятного приоритета) -->
             <div id="tab-settings" class="tab-content">
                 <div class="group-box">
-                    <div class="group-title">Miner Bot Preferences</div>
+                    <div class="group-title">Автоматизация сбора</div>
                     <form action="/update_settings" method="POST">
-                        <div style="margin-bottom: 12px;">
-                            <label style="display: block; margin-bottom: 5px; font-weight: bold;">Farming Priority Strategy:</label>
-                            <select name="priority_mode" style="width: 250px;">
-                                <option value="STREAK" {% if priority_mode == 'STREAK' %}selected{% endif %}>Keep Watch Streak (Максимизация серии)</option>
-                                <option value="DROPS" {% if priority_mode == 'DROPS' %}selected{% endif %}>Drops Campaign First (Сначала Twitch Drops)</option>
-                                <option value="ORDER" {% if priority_mode == 'ORDER' %}selected{% endif %}>Order of Channels (По порядку в списке)</option>
-                            </select>
-                        </div>
-
                         <div style="margin-bottom: 14px;">
-                            <label style="cursor: pointer;">
+                            <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
                                 <input type="checkbox" name="auto_claim" {% if auto_claim_drops == 1 %}checked{% endif %}>
-                                <b>Auto-claim Channel Points chest bonuses & Drops</b>
+                                <span>Автоматически собирать сундуки с бонусными баллами (+50) и Twitch Drops</span>
                             </label>
                         </div>
-
-                        <button type="submit" class="steam-btn">Save Preferences</button>
+                        <button type="submit" class="steam-btn">Сохранить</button>
                     </form>
                 </div>
 
                 <div class="group-box">
-                    <div class="group-title">Account Session & Security</div>
+                    <div class="group-title">Аккаунт и сессия</div>
                     <div style="display: flex; justify-content: space-between; align-items: center;">
                         <div>
-                            Logged in as: <b>{{ display_name }}</b> (@{{ username }})<br>
-                            <span style="color: var(--steam-text-muted);">Session Key: Active in storage.db</span>
+                            Вы вошли как: <b>{{ display_name }}</b> (@{{ username }})<br>
+                            <span style="color: var(--steam-text-muted);">Сессия сохранена локально в storage.db</span>
                         </div>
-                        <a href="/logout" class="steam-btn danger">Terminate Session</a>
+                        <a href="/logout" class="steam-btn danger">Выйти из аккаунта</a>
                     </div>
                 </div>
             </div>
@@ -494,13 +482,11 @@
         </div>
     </div>
 
-    <!-- Скрытый элемент для надежного копирования -->
     <textarea id="hiddenCopyText" style="position: absolute; left: -9999px;"></textarea>
 
     <script>
         let currentAuthCode = null;
 
-        // Переключение классических вкладок Steam
         function switchTab(tabName) {
             document.querySelectorAll('.menu-item').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
@@ -517,7 +503,6 @@
             }
         }
 
-        // Надежный кроссбраузерный fallback для копирования кода по HTTP
         function copyCode() {
             if (!currentAuthCode) return;
             const hiddenArea = document.getElementById('hiddenCopyText');
@@ -530,7 +515,6 @@
             setTimeout(() => { notice.style.display = 'none'; }, 3000);
         }
 
-        // Авто-опрос бэкенда каждую секунду
         setInterval(async () => {
             try {
                 const res = await fetch('/api/check_status');
