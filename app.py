@@ -39,12 +39,22 @@ def init_db():
                 username TEXT
             )
         """)
+        
+        # Автоматическая миграция для уже созданных баз данных
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "auto_claim_drops" not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN auto_claim_drops INTEGER DEFAULT 1")
+        if "priority_mode" not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN priority_mode TEXT DEFAULT 'STREAK'")
+            
         conn.commit()
 
 init_db()
 
 active_miners = {}
 
+# Глобальный перехватчик потоков stdout и stderr
 class UniversalInterceptor:
     def __init__(self, stream):
         self.stream = stream
@@ -277,8 +287,8 @@ async def dashboard(request: Request):
         row = cursor.fetchone()
         saved_streamers = [s.strip().lower() for s in row[0].split(",")] if row and row[0] else []
         auth_token = row[1] if row else ""
-        auto_claim_drops = row[2] if row else 1
-        priority_mode = row[3] if row else "STREAK"
+        auto_claim_drops = row[2] if row and len(row) > 2 and row[2] is not None else 1
+        priority_mode = row[3] if row and len(row) > 3 and row[3] else "STREAK"
 
     channels_data = get_channels_data_bulk(saved_streamers, auth_token)
     streamers = []
