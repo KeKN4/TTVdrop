@@ -17,6 +17,8 @@ app = FastAPI(title="TTV Drop Multi-User")
 templates = Jinja2Templates(directory="templates")
 
 DB_PATH = "storage.db"
+COOKIES_DIR = "user_sessions"
+os.makedirs(COOKIES_DIR, exist_ok=True)
 
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
@@ -48,12 +50,14 @@ init_db()
 
 active_miners = {}
 
+# Глобальный перехватчик stdout и stderr
 class UniversalInterceptor:
     def __init__(self, stream):
         self.stream = stream
 
     def write(self, text):
         self.stream.write(text)
+        # Ловим код активации устройства
         if "enter this code:" in text:
             match = re.search(r'enter this code:\s*([A-Z0-9]+)', text, re.IGNORECASE)
             if match:
@@ -61,6 +65,7 @@ class UniversalInterceptor:
                 for user in active_miners:
                     active_miners[user]["auth_code"] = code
                     active_miners[user]["status"] = "Требуется активация"
+        # Ловим завершение входа
         elif any(phrase in text for phrase in [
             "Start session:", 
             "Mining started", 
@@ -70,8 +75,9 @@ class UniversalInterceptor:
             "You are now logged in"
         ]):
             for user in active_miners:
-                active_miners[user]["auth_code"] = None
-                active_miners[user]["status"] = "В сети (Фарминг)"
+                if active_miners[user].get("auth_code"):
+                    active_miners[user]["auth_code"] = None
+                    active_miners[user]["status"] = "В сети (Фарминг)"
 
     def flush(self):
         self.stream.flush()
@@ -205,21 +211,16 @@ def worker_thread(username: str, auth_token: str, streamers: list):
         signal.signal = lambda *args, **kwargs: None
         active_miners[username]["status"] = "Запуск (Ожидание)"
         
+        # Индивидуальная папка для каждого аккаунта
+        user_cookie_path = os.path.join(COOKIES_DIR, f"{username}_cookies.json")
+
         twitch_miner = TwitchChannelPointsMiner(
             username=username,
+            cookies_file_path=user_cookie_path,
             enable_analytics=False,
             disable_ssl_cert_verification=True
         )
         
-        if hasattr(twitch_miner, "twitch"):
-            t = twitch_miner.twitch
-            for s_attr in ["_session", "session"]:
-                if hasattr(t, s_attr):
-                    s = getattr(t, s_attr)
-                    if hasattr(s, "cookies"):
-                        s.cookies.set("auth-token", auth_token, domain=".twitch.tv")
-                        s.cookies.set("auth-token", auth_token)
-
         active_miners[username]["miner"] = twitch_miner
         channels_to_mine = [s.strip().lower() for s in streamers if s.strip()]
         twitch_miner.mine(channels_to_mine)
