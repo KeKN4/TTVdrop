@@ -28,7 +28,9 @@ def init_db():
                 avatar_url TEXT,
                 auth_token TEXT,
                 selected_streamers TEXT,
-                status TEXT DEFAULT 'Остановлен'
+                status TEXT DEFAULT 'Остановлен',
+                auto_claim_drops INTEGER DEFAULT 1,
+                priority_mode TEXT DEFAULT 'STREAK'
             )
         """)
         cursor.execute("""
@@ -43,7 +45,6 @@ init_db()
 
 active_miners = {}
 
-# Глобальный перехватчик stdout и stderr
 class UniversalInterceptor:
     def __init__(self, stream):
         self.stream = stream
@@ -72,7 +73,6 @@ class UniversalInterceptor:
     def __getattr__(self, name):
         return getattr(self.stream, name)
 
-# Логи майнера идут в stderr, перехватываем оба потока
 sys.stdout = UniversalInterceptor(sys.stdout)
 sys.stderr = UniversalInterceptor(sys.stderr)
 
@@ -95,7 +95,7 @@ def verify_twitch_token(token: str):
         print(f"[AUTH ERROR] {e}")
     return None, None, None
 
-def get_channels_avatars_bulk(logins: list, token: str):
+def get_channels_data_bulk(logins: list, token: str):
     default_avatar = "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png"
     if not logins:
         return {}
@@ -117,29 +117,56 @@ def get_channels_avatars_bulk(logins: list, token: str):
         login
         displayName
         profileImageURL(width: 70)
+        stream {{
+          id
+          viewersCount
+          game {{
+            name
+          }}
+        }}
+        communityPoints {{
+          user {{
+            balance
+          }}
+        }}
       }}
     }}
     """
-    avatars_map = {}
+    channels_map = {}
     try:
-        resp = requests.post(url, json={"query": query}, headers=headers, timeout=4)
+        resp = requests.post(url, json={"query": query}, headers=headers, timeout=5)
         if resp.status_code == 200:
             data = resp.json().get("data") or {}
             users = data.get("users") or []
             for u in users:
                 if u and u.get("login"):
-                    avatars_map[u["login"].lower()] = {
+                    stream = u.get("stream")
+                    points_data = u.get("communityPoints") or {}
+                    balance = (points_data.get("user") or {}).get("balance", "N/A")
+                    
+                    channels_map[u["login"].lower()] = {
                         "name": u.get("displayName") or u["login"],
-                        "avatar": u.get("profileImageURL") or default_avatar
+                        "avatar": u.get("profileImageURL") or default_avatar,
+                        "is_live": stream is not None,
+                        "game": stream.get("game", {}).get("name") if stream and stream.get("game") else "Офлайн",
+                        "viewers": stream.get("viewersCount", 0) if stream else 0,
+                        "points": f"{balance:,}".replace(",", " ") if isinstance(balance, int) else "—"
                     }
     except Exception as e:
-        print(f"[BULK AVATAR ERROR] {e}")
+        print(f"[BULK DATA ERROR] {e}")
 
     for l in clean_logins:
-        if l not in avatars_map:
-            avatars_map[l] = {"name": l, "avatar": default_avatar}
+        if l not in channels_map:
+            channels_map[l] = {
+                "name": l,
+                "avatar": default_avatar,
+                "is_live": False,
+                "game": "Неизвестно",
+                "viewers": 0,
+                "points": "—"
+            }
             
-    return avatars_map
+    return channels_map
 
 def worker_thread(username: str, auth_token: str, streamers: list):
     try:
@@ -246,21 +273,26 @@ async def dashboard(request: Request):
 
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT selected_streamers, auth_token FROM users WHERE username = ?", (user,))
+        cursor.execute("SELECT selected_streamers, auth_token, auto_claim_drops, priority_mode FROM users WHERE username = ?", (user,))
         row = cursor.fetchone()
         saved_streamers = [s.strip().lower() for s in row[0].split(",")] if row and row[0] else []
         auth_token = row[1] if row else ""
+        auto_claim_drops = row[2] if row else 1
+        priority_mode = row[3] if row else "STREAK"
 
-    avatars_map = get_channels_avatars_bulk(saved_streamers, auth_token)
+    channels_data = get_channels_data_bulk(saved_streamers, auth_token)
     streamers = []
     for s_login in saved_streamers:
         if s_login:
-            info = avatars_map.get(s_login, {})
+            info = channels_data.get(s_login, {})
             streamers.append({
                 "login": s_login,
                 "name": info.get("name", s_login),
                 "avatar": info.get("avatar", "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png"),
-                "is_live": False
+                "is_live": info.get("is_live", False),
+                "game": info.get("game", "Офлайн"),
+                "viewers": info.get("viewers", 0),
+                "points": info.get("points", "—")
             })
 
     user_miner_data = active_miners.get(user, {})
@@ -279,11 +311,12 @@ async def dashboard(request: Request):
             "selected_channels": saved_streamers,
             "status": status,
             "auth_code": auth_code,
-            "is_running": is_running
+            "is_running": is_running,
+            "auto_claim_drops": auto_claim_drops,
+            "priority_mode": priority_mode
         }
     )
 
-# Быстрый API эндпоинт для проверки статуса и кода в реальном времени
 @app.get("/api/check_status")
 async def check_status(request: Request):
     user, _, _ = get_current_user_info(request)
@@ -334,6 +367,20 @@ async def remove_channel(request: Request, channel: str = Form(...)):
             saved.remove(channel)
             cursor.execute("UPDATE users SET selected_streamers = ? WHERE username = ?", (",".join(saved), user))
             conn.commit()
+
+    return RedirectResponse(url="/dashboard", status_code=303)
+
+@app.post("/update_settings")
+async def update_settings(request: Request, priority_mode: str = Form("STREAK"), auto_claim: str = Form(None)):
+    user, _, _ = get_current_user_info(request)
+    if not user:
+        return RedirectResponse(url="/login")
+
+    auto_claim_val = 1 if auto_claim == "on" else 0
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET priority_mode = ?, auto_claim_drops = ? WHERE username = ?", (priority_mode, auto_claim_val, user))
+        conn.commit()
 
     return RedirectResponse(url="/dashboard", status_code=303)
 
