@@ -3,69 +3,334 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TTV Cloud Farm</title>
+    <title>TTV Cloud Farm — Steam Edition</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f0f13; color: #efeff1; margin: 0; padding: 20px; }
-        .container { max-width: 700px; margin: 0 auto; }
-        .card { background: #18181b; border: 1px solid #2d2d35; border-radius: 10px; padding: 24px; margin-bottom: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
-        h1, h2 { margin-top: 0; color: #a970ff; }
-        label { display: block; margin-bottom: 6px; font-size: 14px; color: #adadb8; }
-        input[type="text"], input[type="password"] { width: 100%; box-sizing: border-box; padding: 12px; background: #0e0e10; border: 1px solid #464649; border-radius: 6px; color: #fff; margin-bottom: 16px; font-size: 15px; }
-        input:focus { border-color: #9146ff; outline: none; }
-        button { width: 100%; background: #9146ff; color: #fff; border: none; padding: 14px; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
-        button:hover { background: #772ce8; }
-        table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #2d2d35; font-size: 14px; }
-        th { color: #adadb8; }
-        .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 12px; background: #1f3724; color: #57d472; font-weight: bold; }
+        :root {
+            --steam-bg: #4c5844;
+            --steam-dark: #3a4334;
+            --steam-darker: #282e24;
+            --steam-light: #5e6d54;
+            --steam-border-hi: #6d7f62;
+            --steam-border-lo: #272d22;
+            --steam-text: #c4cebe;
+            --steam-text-bright: #e1e9db;
+            --steam-text-muted: #8d9885;
+            --steam-accent: #a3b899;
+            --steam-green: #68b248;
+        }
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+        }
+
+        body {
+            font-family: "Tahoma", "Segoe UI", Arial, sans-serif;
+            background-color: #1f231c;
+            color: var(--steam-text);
+            margin: 0;
+            padding: 24px;
+            font-size: 11px;
+        }
+
+        /* Главное окно Steam */
+        .steam-window {
+            max-width: 760px;
+            margin: 0 auto;
+            background-color: var(--steam-bg);
+            border: 1px solid var(--steam-border-hi);
+            box-shadow: 2px 2px 0px var(--steam-border-lo), inset 1px 1px 0px var(--steam-light);
+            padding: 2px;
+        }
+
+        /* Верхний заголовок окна */
+        .title-bar {
+            background: linear-gradient(to right, #434e3c, #3a4434);
+            padding: 5px 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--steam-border-lo);
+        }
+
+        .title-bar .title {
+            color: var(--steam-text-bright);
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            letter-spacing: 0.5px;
+        }
+
+        .window-controls {
+            display: flex;
+            gap: 2px;
+        }
+
+        .win-btn {
+            width: 14px;
+            height: 14px;
+            background: var(--steam-bg);
+            border: 1px solid var(--steam-border-hi);
+            border-right-color: var(--steam-border-lo);
+            border-bottom-color: var(--steam-border-lo);
+            color: var(--steam-text);
+            font-size: 9px;
+            line-height: 11px;
+            text-align: center;
+            cursor: pointer;
+        }
+
+        /* Меню навигации в стиле старого Steam */
+        .menu-bar {
+            display: flex;
+            gap: 16px;
+            padding: 6px 12px;
+            background-color: var(--steam-dark);
+            border-bottom: 1px solid var(--steam-border-lo);
+            color: var(--steam-text-muted);
+            font-size: 11px;
+        }
+
+        .menu-item {
+            cursor: pointer;
+        }
+        .menu-item.active {
+            color: var(--steam-text-bright);
+            text-decoration: underline;
+        }
+        .menu-item:hover {
+            color: var(--steam-text-bright);
+        }
+
+        .content-area {
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        /* Внутренние рамки / групбоксы */
+        .group-box {
+            background-color: var(--steam-dark);
+            border: 1px solid var(--steam-border-lo);
+            box-shadow: inset 1px 1px 0px var(--steam-border-lo), 1px 1px 0px var(--steam-light);
+            padding: 14px;
+            position: relative;
+        }
+
+        .group-title {
+            color: var(--steam-text-bright);
+            font-size: 11px;
+            font-weight: bold;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #4a5643;
+            padding-bottom: 4px;
+        }
+
+        /* Элементы формы */
+        .form-row {
+            margin-bottom: 10px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--steam-text);
+            font-size: 11px;
+        }
+
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            background-color: var(--steam-darker);
+            border: 1px solid var(--steam-border-lo);
+            box-shadow: inset 1px 1px 2px #000;
+            color: #fff;
+            padding: 6px 8px;
+            font-family: inherit;
+            font-size: 11px;
+            outline: none;
+        }
+
+        input[type="text"]:focus, input[type="password"]:focus {
+            border-color: var(--steam-accent);
+        }
+
+        /* Кнопки классического Steam */
+        .steam-btn {
+            background-color: var(--steam-bg);
+            border-top: 1px solid var(--steam-border-hi);
+            border-left: 1px solid var(--steam-border-hi);
+            border-right: 1px solid var(--steam-border-lo);
+            border-bottom: 1px solid var(--steam-border-lo);
+            color: var(--steam-text-bright);
+            padding: 6px 16px;
+            font-family: inherit;
+            font-size: 11px;
+            font-weight: bold;
+            cursor: pointer;
+            outline: none;
+            box-shadow: 1px 1px 0px #000;
+        }
+
+        .steam-btn:hover {
+            background-color: var(--steam-light);
+            color: #fff;
+        }
+
+        .steam-btn:active {
+            border-top: 1px solid var(--steam-border-lo);
+            border-left: 1px solid var(--steam-border-lo);
+            border-right: 1px solid var(--steam-border-hi);
+            border-bottom: 1px solid var(--steam-border-hi);
+            padding: 7px 15px 5px 17px;
+        }
+
+        /* Таблица аккаунтов */
+        .steam-table-container {
+            background-color: var(--steam-darker);
+            border: 1px solid var(--steam-border-lo);
+            max-height: 220px;
+            overflow-y: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 11px;
+            text-align: left;
+        }
+
+        th {
+            background-color: var(--steam-dark);
+            color: var(--steam-text-muted);
+            padding: 5px 8px;
+            border-right: 1px solid var(--steam-border-lo);
+            border-bottom: 1px solid var(--steam-border-lo);
+            font-weight: normal;
+        }
+
+        td {
+            padding: 5px 8px;
+            border-bottom: 1px solid #333a2e;
+            color: var(--steam-text);
+        }
+
+        tr:nth-child(even) td {
+            background-color: #242920;
+        }
+
+        tr:hover td {
+            background-color: #3b4635;
+            color: #fff;
+        }
+
+        .status-badge {
+            color: var(--steam-green);
+            font-weight: bold;
+        }
+
+        /* Нижний статус-бар */
+        .status-bar {
+            background-color: var(--steam-dark);
+            padding: 4px 8px;
+            font-size: 10px;
+            color: var(--steam-text-muted);
+            border-top: 1px solid var(--steam-border-lo);
+            display: flex;
+            justify-content: space-between;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>🎮 TTV Cloud Farmer</h1>
-        
-        <div class="card">
-            <h2>Подключить аккаунт</h2>
-            <form action="/start" method="POST">
-                <label>Twitch Логин (Username):</label>
-                <input type="text" name="username" placeholder="например, shroud" required>
 
-                <label>Twitch Пароль:</label>
-                <input type="password" name="password" placeholder="Ваш пароль от Twitch" required>
-
-                <label>Список каналов для фарма (через запятую):</label>
-                <input type="text" name="streamers" placeholder="gaules, dota2ti, silvername" required>
-
-                <button type="submit">Запустить фарм в облаке</button>
-            </form>
+    <div class="steam-window">
+        <!-- Оконная панель -->
+        <div class="title-bar">
+            <div class="title">
+                <span>[Steam v1.0] TTV Cloud Dropper</span>
+            </div>
+            <div class="window-controls">
+                <div class="win-btn">_</div>
+                <div class="win-btn">□</div>
+                <div class="win-btn">✕</div>
+            </div>
         </div>
 
-        <div class="card">
-            <h2>Активные аккаунты</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Пользователь</th>
-                        <th>Каналы</th>
-                        <th>Статус</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for user, data in miners.items() %}
-                    <tr>
-                        <td><b>{{ user }}</b></td>
-                        <td>{{ data.streamers }}</td>
-                        <td><span class="badge">{{ data.status }}</span></td>
-                    </tr>
-                    {% else %}
-                    <tr>
-                        <td colspan="3" style="text-align: center; color: #70707b;">Пока нет запущенных ботов</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+        <!-- Верхнее меню -->
+        <div class="menu-bar">
+            <span class="menu-item active">Channels</span>
+            <span class="menu-item">Farm Monitor</span>
+            <span class="menu-item">Settings</span>
+            <span class="menu-item">Network</span>
+        </div>
+
+        <div class="content-area">
+            <!-- Блок запуска -->
+            <div class="group-box">
+                <div class="group-title">Account Login & Stream Configuration</div>
+                <form action="/start" method="POST">
+                    <div class="form-row">
+                        <label>Twitch Account Name:</label>
+                        <input type="text" name="username" placeholder="Twitch username" required autocomplete="off">
+                    </div>
+
+                    <div class="form-row">
+                        <label>Twitch Password:</label>
+                        <input type="password" name="password" placeholder="••••••••••••" required>
+                    </div>
+
+                    <div class="form-row">
+                        <label>Target Channels (comma separated):</label>
+                        <input type="text" name="streamers" placeholder="gaules, dota2ti, silvername" required autocomplete="off">
+                    </div>
+
+                    <div style="margin-top: 14px; text-align: right;">
+                        <button type="submit" class="steam-btn">Connect & Start Mining</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Список подключенных воркеров -->
+            <div class="group-box">
+                <div class="group-title">Active Workers / Status</div>
+                <div class="steam-table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Account</th>
+                                <th>Targets</th>
+                                <th>Mining State</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for user, data in miners.items() %}
+                            <tr>
+                                <td><b>{{ user }}</b></td>
+                                <td>{{ data.streamers }}</td>
+                                <td><span class="status-badge">{{ data.status }}</span></td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="3" style="text-align: center; color: var(--steam-text-muted); padding: 16px;">
+                                    No miners connected. Add an account above.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Нижняя строка состояния -->
+        <div class="status-bar">
+            <span>Status: Ready</span>
+            <span>Network: 100% (Connected)</span>
         </div>
     </div>
+
 </body>
 </html>
-EOF
