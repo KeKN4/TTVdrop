@@ -10,8 +10,6 @@ from fastapi.templating import Jinja2Templates
 import uvicorn
 
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
-from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer
-from TwitchChannelPointsMiner.classes.Settings import Priority
 
 app = FastAPI(title="TTV Drop Multi-User")
 templates = Jinja2Templates(directory="templates")
@@ -117,11 +115,13 @@ def worker_thread(username: str, auth_token: str, streamers: list):
         signal.signal = lambda *args, **kwargs: None
 
         active_miners[username]["status"] = "В сети (Фарминг)"
+        
         twitch_miner = TwitchChannelPointsMiner(
             username=username,
             enable_analytics=False,
             disable_ssl_cert_verification=True
         )
+        
         if hasattr(twitch_miner, "twitch"):
             t = twitch_miner.twitch
             for s_attr in ["_session", "session"]:
@@ -132,10 +132,15 @@ def worker_thread(username: str, auth_token: str, streamers: list):
                         s.cookies.set("auth-token", auth_token)
 
         active_miners[username]["miner"] = twitch_miner
-        streamer_objs = [Streamer(s.strip(), priority=Priority.HIGH) for s in streamers if s.strip()]
+        
+        # Передаем обычный чистый список имен каналов напрямую
+        channels_to_mine = [s.strip().lower() for s in streamers if s.strip()]
+        
         twitch_miner.analytics(host="0.0.0.0", port=0, refresh=5)
-        twitch_miner.mine(streamer_objs)
+        twitch_miner.mine(channels_to_mine)
+        
     except Exception as e:
+        print(f"[MINER CRASH] {e}")
         if username in active_miners:
             active_miners[username]["status"] = f"Ошибка: {str(e)[:35]}"
 
