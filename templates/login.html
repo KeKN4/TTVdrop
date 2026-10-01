@@ -14,7 +14,7 @@
             --steam-text: #c4cebe;
             --steam-text-bright: #e1e9db;
             --steam-text-muted: #8d9885;
-            --steam-accent: #a3b899;
+            --steam-red: #ff7878;
         }
         * { box-sizing: border-box; user-select: none; }
         body {
@@ -29,7 +29,7 @@
             font-size: 11px;
         }
         .login-dialog {
-            width: 380px;
+            width: 420px;
             background-color: var(--steam-bg);
             border: 1px solid var(--steam-border-hi);
             box-shadow: 2px 2px 0px var(--steam-border-lo), inset 1px 1px 0px var(--steam-light);
@@ -50,19 +50,36 @@
             margin: 2px;
             border: 1px solid var(--steam-border-lo);
         }
-        label { display: block; margin-bottom: 4px; color: var(--steam-text); }
+        .error-msg {
+            background: #4d2323;
+            border: 1px solid var(--steam-red);
+            color: var(--steam-red);
+            padding: 8px;
+            margin-bottom: 12px;
+            font-size: 11px;
+        }
+        .hint-box {
+            background: var(--steam-darker);
+            border: 1px solid var(--steam-border-lo);
+            padding: 8px;
+            color: var(--steam-text-muted);
+            margin-bottom: 12px;
+            line-height: 1.4;
+        }
+        label { display: block; margin-bottom: 6px; color: var(--steam-text-bright); }
         input[type="text"], input[type="password"] {
             width: 100%;
             background-color: var(--steam-darker);
             border: 1px solid var(--steam-border-lo);
             box-shadow: inset 1px 1px 2px #000;
             color: #fff;
-            padding: 6px 8px;
-            margin-bottom: 12px;
+            padding: 7px 8px;
+            margin-bottom: 14px;
             font-size: 11px;
             outline: none;
+            font-family: monospace;
         }
-        .btn-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+        .btn-row { display: flex; justify-content: flex-end; gap: 8px; }
         .steam-btn {
             background-color: var(--steam-bg);
             border-top: 1px solid var(--steam-border-hi);
@@ -87,20 +104,30 @@
 <body>
     <div class="login-dialog">
         <div class="dialog-title">
-            <span>Steam Login</span>
+            <span>Steam Login — Twitch Authentication</span>
             <span>✕</span>
         </div>
         <div class="dialog-body">
-            <form action="/login" method="POST">
-                <label>Twitch Account Name:</label>
-                <input type="text" name="username" required autocomplete="off">
+            {% if error %}
+            <div class="error-msg">
+                <b>Connection Error:</b> {{ error }}
+            </div>
+            {% endif %}
 
-                <label>Password:</label>
-                <input type="password" name="password" required>
+            <div class="hint-box">
+                <b>Как получить auth-token:</b><br>
+                1. Открой <a href="https://twitch.tv" target="_blank" style="color: #a3b899;">twitch.tv</a> в браузере.<br>
+                2. Нажми <b>F12</b> &rarr; вкладка <b>Application</b> (или <b>Память</b>) &rarr; слева <b>Cookies</b>.<br>
+                3. Скопируй значение cookie <code>auth-token</code>.
+            </div>
+
+            <form action="/login" method="POST">
+                <label>Twitch Web Auth-Token:</label>
+                <input type="password" name="auth_token" placeholder="Например: g84jxkd92..." required autocomplete="off">
 
                 <div class="btn-row">
                     <button type="submit" class="steam-btn">Login</button>
-                    <button type="button" class="steam-btn" onclick="window.close()">Cancel</button>
+                    <button type="button" class="steam-btn" onclick="window.location.reload()">Cancel</button>
                 </div>
             </form>
         </div>
