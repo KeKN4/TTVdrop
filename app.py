@@ -17,8 +17,6 @@ app = FastAPI(title="TTV Drop Multi-User")
 templates = Jinja2Templates(directory="templates")
 
 DB_PATH = "storage.db"
-COOKIES_DIR = "user_sessions"
-os.makedirs(COOKIES_DIR, exist_ok=True)
 
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
@@ -50,14 +48,14 @@ init_db()
 
 active_miners = {}
 
-# Глобальный перехватчик stdout и stderr
+# Глобальный перехватчик потоков stdout и stderr
 class UniversalInterceptor:
     def __init__(self, stream):
         self.stream = stream
 
     def write(self, text):
         self.stream.write(text)
-        # Ловим код активации устройства
+        # Ловим код активации устройства TV Login
         if "enter this code:" in text:
             match = re.search(r'enter this code:\s*([A-Z0-9]+)', text, re.IGNORECASE)
             if match:
@@ -65,7 +63,7 @@ class UniversalInterceptor:
                 for user in active_miners:
                     active_miners[user]["auth_code"] = code
                     active_miners[user]["status"] = "Требуется активация"
-        # Ловим завершение входа
+        # Ловим переход майнера к работе
         elif any(phrase in text for phrase in [
             "Start session:", 
             "Mining started", 
@@ -77,7 +75,7 @@ class UniversalInterceptor:
             for user in active_miners:
                 if active_miners[user].get("auth_code"):
                     active_miners[user]["auth_code"] = None
-                    active_miners[user]["status"] = "В сети (Фарминг)"
+                active_miners[user]["status"] = "В сети (Фарминг)"
 
     def flush(self):
         self.stream.flush()
@@ -206,21 +204,18 @@ def get_channels_data_bulk(logins: list, token: str):
             
     return channels_map
 
-def worker_thread(username: str, auth_token: str, streamers: list):
+def worker_thread(username: str, streamers: list):
     try:
         signal.signal = lambda *args, **kwargs: None
         active_miners[username]["status"] = "Запуск (Ожидание)"
         
-        # Индивидуальная папка для каждого аккаунта
-        user_cookie_path = os.path.join(COOKIES_DIR, f"{username}_cookies.json")
-
+        # Передаем только поддерживаемые библиотекой параметры
         twitch_miner = TwitchChannelPointsMiner(
             username=username,
-            cookies_file_path=user_cookie_path,
             enable_analytics=False,
             disable_ssl_cert_verification=True
         )
-        
+
         active_miners[username]["miner"] = twitch_miner
         channels_to_mine = [s.strip().lower() for s in streamers if s.strip()]
         twitch_miner.mine(channels_to_mine)
@@ -420,16 +415,15 @@ async def start_miner(request: Request):
 
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT selected_streamers, auth_token FROM users WHERE username = ?", (user,))
+        cursor.execute("SELECT selected_streamers FROM users WHERE username = ?", (user,))
         row = cursor.fetchone()
         chosen_channels = [s.strip() for s in row[0].split(",")] if row and row[0] else []
-        auth_token = row[1] if row else ""
 
     if user in active_miners:
         del active_miners[user]
 
-    if chosen_channels and auth_token:
-        t = threading.Thread(target=worker_thread, args=(user, auth_token, chosen_channels), daemon=True)
+    if chosen_channels:
+        t = threading.Thread(target=worker_thread, args=(user, chosen_channels), daemon=True)
         active_miners[user] = {"thread": t, "status": "Запуск воркера...", "auth_code": None}
         t.start()
 
