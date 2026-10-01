@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Steam — TTV Farm Monitor</title>
+    <title>Steam — TTV Farm Station</title>
     <style>
         :root {
             --steam-bg: #4c5844;
@@ -27,7 +27,7 @@
             font-size: 11px;
         }
         .steam-window {
-            max-width: 820px;
+            max-width: 860px;
             margin: 0 auto;
             background-color: var(--steam-bg);
             border: 1px solid var(--steam-border-hi);
@@ -55,14 +55,26 @@
         .menu-item.active { color: var(--steam-text-bright); text-decoration: underline; }
         .content { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
         
+        /* Карточка текущего профиля */
         .profile-card {
             background-color: var(--steam-dark);
             border: 1px solid var(--steam-border-lo);
             box-shadow: inset 1px 1px 0px var(--steam-border-lo), 1px 1px 0px var(--steam-light);
-            padding: 10px 14px;
+            padding: 8px 12px;
             display: flex;
             justify-content: space-between;
             align-items: center;
+        }
+        .profile-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .user-avatar {
+            width: 38px;
+            height: 38px;
+            border: 1px solid var(--steam-border-hi);
+            background: #20241d;
         }
         .profile-name {
             font-size: 13px;
@@ -84,37 +96,65 @@
             padding-bottom: 4px;
             text-transform: uppercase;
         }
-        .channels-grid {
+
+        /* Список карточек стримеров */
+        .streamers-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 6px;
-            max-height: 250px;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 8px;
+            max-height: 340px;
             overflow-y: auto;
             background-color: var(--steam-darker);
             padding: 8px;
             border: 1px solid var(--steam-border-lo);
         }
-        .channel-label {
+        .streamer-card {
             display: flex;
             align-items: center;
-            gap: 6px;
-            color: var(--steam-text);
+            gap: 8px;
+            padding: 6px;
+            background: #2f372a;
+            border: 1px solid #3c4636;
             cursor: pointer;
-            padding: 2px 4px;
-            border-radius: 2px;
+            transition: background 0.1s;
         }
-        .channel-label:hover {
-            background-color: #384232;
-            color: #fff;
+        .streamer-card:hover {
+            background-color: #3f4b38;
+            border-color: var(--steam-accent);
         }
-        input[type="text"] {
-            background-color: var(--steam-darker);
-            border: 1px solid var(--steam-border-lo);
-            color: #fff;
-            padding: 5px 8px;
-            font-size: 11px;
-            outline: none;
+        .streamer-card input[type="checkbox"] {
+            margin: 0 4px 0 0;
+            cursor: pointer;
         }
+        .streamer-avatar {
+            width: 30px;
+            height: 30px;
+            border-radius: 3px;
+            border: 1px solid #4a5742;
+            object-fit: cover;
+        }
+        .streamer-meta {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .streamer-name {
+            font-weight: bold;
+            color: var(--steam-text-bright);
+            white-space: nowrap;
+            text-overflow: ellipsis;
+            overflow: hidden;
+        }
+        .live-tag {
+            font-size: 9px;
+            color: #ff5555;
+            font-weight: bold;
+        }
+        .offline-tag {
+            font-size: 9px;
+            color: var(--steam-text-muted);
+        }
+
         .steam-btn {
             background-color: var(--steam-bg);
             border-top: 1px solid var(--steam-border-hi);
@@ -149,9 +189,8 @@
         </div>
         <div class="menu-bar">
             <div class="menu-left">
-                <span class="menu-item active">Channels & Follows</span>
+                <span class="menu-item active">Followed Channels</span>
                 <span class="menu-item">Drops Inventory</span>
-                <span class="menu-item">Settings</span>
             </div>
             <div>
                 <a href="/logout" style="color: var(--steam-text-muted); text-decoration: none;">[Log Out]</a>
@@ -159,41 +198,49 @@
         </div>
 
         <div class="content">
-            <!-- Блок профиля -->
+            <!-- Профиль Steam / Twitch -->
             <div class="profile-card">
-                <div>
-                    <div class="profile-name">{{ display_name }}</div>
-                    <div style="color: var(--steam-text-muted);">Twitch ID: @{{ username }}</div>
+                <div class="profile-info">
+                    {% if avatar_url %}
+                    <img src="{{ avatar_url }}" class="user-avatar" alt="Avatar">
+                    {% endif %}
+                    <div>
+                        <div class="profile-name">{{ display_name }}</div>
+                        <div style="color: var(--steam-text-muted);">Twitch User: @{{ username }}</div>
+                    </div>
                 </div>
                 <div>
-                    Mining State: <span class="status-badge">{{ status }}</span>
+                    Mining Status: <span class="status-badge">{{ status }}</span>
                 </div>
             </div>
 
-            <!-- Форма каналов -->
+            <!-- Список стримеров с аватарками -->
             <div class="group-box">
                 <div class="group-title">Select Followed Channels for Farming</div>
                 <form action="/start_miner" method="POST">
                     <p style="color: var(--steam-text-muted); margin: 0 0 8px 0;">
-                        Twitch follows (отметь нужные каналы для фарма баллов и Drops):
+                        Список твоих подписок с Twitch. Отметь галочками тех, на ком нужно собирать Drops:
                     </p>
 
-                    <div class="channels-grid">
-                        {% for ch in channels %}
-                        <label class="channel-label">
-                            <input type="checkbox" name="channels" value="{{ ch }}" {% if ch in selected_channels %}checked{% endif %}>
-                            {{ ch }}
+                    <div class="streamers-grid">
+                        {% for s in streamers %}
+                        <label class="streamer-card">
+                            <input type="checkbox" name="channels" value="{{ s.login }}" {% if s.login in selected_channels %}checked{% endif %}>
+                            <img src="{{ s.avatar }}" class="streamer-avatar" alt="{{ s.name }}">
+                            <div class="streamer-meta">
+                                <span class="streamer-name">{{ s.name }}</span>
+                                {% if s.is_live %}
+                                <span class="live-tag">● В эфире</span>
+                                {% else %}
+                                <span class="offline-tag">Оффлайн</span>
+                                {% endif %}
+                            </div>
                         </label>
                         {% else %}
-                        <div style="grid-column: 1 / -1; color: var(--steam-text-muted); padding: 8px;">
-                            Подписки не найдены или список пуст. Добавь стримера вручную ниже:
+                        <div style="grid-column: 1 / -1; color: var(--steam-text-muted); padding: 12px; text-align: center;">
+                            Список подписок не найден. Убедись, что на аккаунте есть отслеживаемые каналы.
                         </div>
                         {% endfor %}
-                    </div>
-
-                    <div style="margin-top: 10px; display: flex; gap: 8px; align-items: center;">
-                        <label>Добавить вручную:</label>
-                        <input type="text" name="custom_channel" placeholder="например: shroud" style="width: 180px;">
                     </div>
 
                     <div style="margin-top: 14px; display: flex; justify-content: space-between; align-items: center;">
@@ -209,8 +256,8 @@
         </div>
 
         <div class="status-bar">
-            <span>Account: <b>{{ username }}</b></span>
-            <span>Network: OK (Connected to Twitch)</span>
+            <span>Account: <b>{{ display_name }}</b></span>
+            <span>Channels loaded: {{ streamers|length }}</span>
         </div>
     </div>
 </body>
