@@ -43,7 +43,7 @@ init_db()
 
 active_miners = {}
 
-# Перехватчик системного вывода stdout для отлова кода активации
+# Перехватчик системного вывода stdout для отлова кода активации с полной поддержкой TTY
 class OutputInterceptor:
     def __init__(self, original_stdout):
         self.original_stdout = original_stdout
@@ -64,6 +64,12 @@ class OutputInterceptor:
 
     def flush(self):
         self.original_stdout.flush()
+
+    def isatty(self):
+        return hasattr(self.original_stdout, "isatty") and self.original_stdout.isatty()
+
+    def __getattr__(self, name):
+        return getattr(self.original_stdout, name)
 
 sys.stdout = OutputInterceptor(sys.stdout)
 
