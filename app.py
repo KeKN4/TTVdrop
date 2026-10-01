@@ -1,6 +1,4 @@
 import os
-import re
-import json
 import secrets
 import sqlite3
 import threading
@@ -64,117 +62,84 @@ def verify_twitch_token(token: str):
         print(f"[AUTH ERROR] {e}")
     return None, None, None
 
-# Пошаговое получение списка отслеживаемых стримеров с полным логированием
+# Надежное получение списка подписок через встроенные механизмы библиотеки майнера и официальный Helix
 def get_user_follows_full(login: str, token: str):
     if not token:
-        print("[STEP 0] Ошибка: Токен отсутствует!")
         return []
 
-    print("\n" + "="*50)
-    print(f"[STEP 1] Начало загрузки подписок для @{login}")
-    print(f"[STEP 1] Токен (превью): {token[:6]}...{token[-4:]}")
-    
-    session = requests.Session()
-    session.cookies.set("auth-token", token, domain=".twitch.tv")
-    session.cookies.set("auth-token", token)
-
-    headers = {
-        "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
-        "Authorization": f"OAuth {token}",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Accept-Language": "en-US",
-        "Client-Session-Id": secrets.token_hex(16),
-        "X-Device-Id": secrets.token_hex(16)
-    }
-
     streamers = {}
+    print("\n" + "="*50)
+    print(f"[FOLLOWS] Запрос подписок для @{login} через TwitchChannelPointsMiner...")
 
-    # --- ШАГ 2: Запрос к официальному мобильному GQL (онлайн-каналы из FollowedLiveUsers) ---
-    print("--> [STEP 2] Запрос списка стримов через GraphQL...")
-    gql_query = """
-    query {
-      currentUser {
-        id
-        followedLiveUsers {
-          nodes {
-            login
-            displayName
-            profileImageURL(width: 70)
-          }
-        }
-      }
-    }
-    """
     try:
-        r_gql = session.post("https://gql.twitch.tv/gql", json={"query": gql_query}, headers=headers, timeout=8)
-        print(f"    GQL Status: {r_gql.status_code}")
+        # Инициализируем объект майнера для извлечения его внутреннего API клиента
+        temp_miner = TwitchChannelPointsMiner(
+            username=login,
+            enable_analytics=False,
+            disable_ssl_cert_verification=True
+        )
         
-        with open("debug_gql.json", "w", encoding="utf-8") as f:
-            f.write(r_gql.text)
-        print("    [ДАМП] Ответ GraphQL сохранен в debug_gql.json")
+        # Корректно прописываем auth-token в сессию майнера
+        if hasattr(temp_miner, "twitch"):
+            t = temp_miner.twitch
+            for s_attr in ["_session", "session"]:
+                if hasattr(t, s_attr):
+                    s = getattr(t, s_attr)
+                    if hasattr(s, "cookies"):
+                        s.cookies.set("auth-token", token, domain=".twitch.tv")
+                        s.cookies.set("auth-token", token)
+            
+            # Пробуем достать каналы через встроенную функцию библиотеки
+            if hasattr(t, "get_followed_channels"):
+                channels = t.get_followed_channels()
+                print(f"[MINER API] Получено через библиотеку: {len(channels) if channels else 0}")
+                if channels:
+                    for ch in channels:
+                        ch_name = getattr(ch, "username", str(ch)).strip()
+                        if ch_name:
+                            streamers[ch_name.lower()] = {
+                                "login": ch_name.lower(),
+                                "name": ch_name,
+                                "avatar": "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
+                                "is_live": False
+                            }
+    except Exception as ex:
+        print(f"[MINER API ERROR] {ex}")
 
-        if r_gql.status_code == 200:
-            res_j = r_gql.json()
-            data = res_j.get("data") or {}
-            c_user = data.get("currentUser") or {}
-            nodes = (c_user.get("followedLiveUsers") or {}).get("nodes") or []
-            print(f"    Найдено активных стримеров в GQL: {len(nodes)}")
-            for n in nodes:
-                if n and n.get("login"):
-                    ch_log = n["login"]
-                    streamers[ch_log] = {
-                        "login": ch_log,
-                        "name": n.get("displayName") or ch_log,
-                        "avatar": n.get("profileImageURL") or "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
-                        "is_live": True
-                    }
-        else:
-            print(f"    [!] Ошибка GQL запроса: {r_gql.text[:200]}")
-    except Exception as e:
-        print(f"    [!] Исключение при GQL запросе: {e}")
-
-    # --- ШАГ 3: Запрос HTML веб-страницы отслеживаемых каналов ---
-    print("--> [STEP 3] Запрос страницы www.twitch.tv/directory/following/channels...")
-    try:
-        page_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9"
-        }
-        r_page = session.get("https://www.twitch.tv/directory/following/channels", headers=page_headers, timeout=10)
-        print(f"    Page Status: {r_page.status_code}")
-        print(f"    Final URL: {r_page.url}")
-        print(f"    Длина HTML: {len(r_page.text)} символов")
-
-        with open("debug_page.html", "w", encoding="utf-8") as f:
-            f.write(r_page.text)
-        print("    [ДАМП] HTML страницы сохранен в debug_page.html")
-
-        # --- ШАГ 4: Поиск каналов в структурированном кэше (Apollo / Next.js Data) ---
-        print("--> [STEP 4] Поиск данных стримеров в HTML...")
-        matches_user = re.findall(r'\{[^{}]*"__typename":"User"[^{}]*"login":"([a-zA-Z0-9_]+)"[^{}]*"displayName":"([^"]+)"', r_page.text)
-        print(f"    Найдено совпадений User в теле HTML: {len(matches_user)}")
-        
-        for m_login, m_name in matches_user:
-            m_login_clean = m_login.lower()
-            if m_login_clean != login.lower() and m_login_clean not in streamers:
-                # Ищем аватарку рядом с логином
-                avatar_match = re.search(r'profileImageURL":"([^"]+)"', r_page.text[r_page.text.find(m_login):r_page.text.find(m_login)+300])
-                avatar = avatar_match.group(1) if avatar_match else "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png"
-                
-                streamers[m_login_clean] = {
-                    "login": m_login_clean,
-                    "name": m_name,
-                    "avatar": avatar,
-                    "is_live": False
-                }
-    except Exception as e:
-        print(f"    [!] Исключение при парсинге HTML: {e}")
+    # Если библиотека ничего не вернула, запрашиваем через официальный Helix API с Bearer токеном
+    if not streamers:
+        print("[HELIX] Пробуем запросить через официальный Helix API...")
+        try:
+            headers_helix = {
+                "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
+                "Authorization": f"Bearer {token}"
+            }
+            u_resp = requests.get("https://api.twitch.tv/helix/users", headers=headers_helix, timeout=6)
+            if u_resp.status_code == 200:
+                user_id = u_resp.json()["data"][0]["id"]
+                f_resp = requests.get(
+                    f"https://api.twitch.tv/helix/channels/followed?user_id={user_id}&first=100",
+                    headers=headers_helix,
+                    timeout=8
+                )
+                print(f"[HELIX FOLLOWS] Status: {f_resp.status_code}")
+                if f_resp.status_code == 200:
+                    for item in f_resp.json().get("data", []):
+                        ch_log = item.get("broadcaster_login")
+                        ch_name = item.get("broadcaster_name") or ch_log
+                        if ch_log:
+                            streamers[ch_log] = {
+                                "login": ch_log,
+                                "name": ch_name,
+                                "avatar": "https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb60-108c4644ec3a-profile_image-70x70.png",
+                                "is_live": False
+                            }
+        except Exception as ex:
+            print(f"[HELIX ERROR] {ex}")
 
     res = list(streamers.values())
     res.sort(key=lambda x: (not x["is_live"], x["name"].lower()))
-    print(f"--> [ИТОГ] Собрано каналов: {len(res)}")
+    print(f"[TOTAL LOADED STREAMERS] Итого найдено: {len(res)}")
     print("="*50 + "\n")
     return res
 
