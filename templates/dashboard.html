@@ -15,6 +15,7 @@
             --steam-text-bright: #e1e9db;
             --steam-text-muted: #8d9885;
             --steam-green: #68b248;
+            --steam-accent: #a3b899;
         }
         * { box-sizing: border-box; user-select: none; }
         body {
@@ -53,6 +54,22 @@
         .menu-item { cursor: pointer; color: var(--steam-text-muted); }
         .menu-item.active { color: var(--steam-text-bright); text-decoration: underline; }
         .content { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+        
+        .profile-card {
+            background-color: var(--steam-dark);
+            border: 1px solid var(--steam-border-lo);
+            box-shadow: inset 1px 1px 0px var(--steam-border-lo), 1px 1px 0px var(--steam-light);
+            padding: 10px 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .profile-name {
+            font-size: 13px;
+            font-weight: bold;
+            color: var(--steam-text-bright);
+        }
+
         .group-box {
             background-color: var(--steam-dark);
             border: 1px solid var(--steam-border-lo);
@@ -83,8 +100,13 @@
             gap: 6px;
             color: var(--steam-text);
             cursor: pointer;
+            padding: 2px 4px;
+            border-radius: 2px;
         }
-        .channel-label:hover { color: #fff; }
+        .channel-label:hover {
+            background-color: #384232;
+            color: #fff;
+        }
         input[type="text"] {
             background-color: var(--steam-darker);
             border: 1px solid var(--steam-border-lo);
@@ -122,7 +144,7 @@
 <body>
     <div class="steam-window">
         <div class="title-bar">
-            <span>[Steam v1.0] TTV Farm Station — Account: {{ username }}</span>
+            <span>[Steam v1.0] TTV Farm Station</span>
             <span>✕</span>
         </div>
         <div class="menu-bar">
@@ -137,27 +159,23 @@
         </div>
 
         <div class="content">
-            <!-- Статус фарма -->
-            <div class="group-box">
-                <div class="group-title">Miner Status</div>
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>Current state: <span class="status-badge">{{ status }}</span></div>
-                    <div>
-                        {% if is_running %}
-                        <form action="/stop_miner" method="POST" style="display:inline;">
-                            <button type="submit" class="steam-btn danger">Stop Mining</button>
-                        </form>
-                        {% endif %}
-                    </div>
+            <!-- Блок профиля -->
+            <div class="profile-card">
+                <div>
+                    <div class="profile-name">{{ display_name }}</div>
+                    <div style="color: var(--steam-text-muted);">Twitch ID: @{{ username }}</div>
+                </div>
+                <div>
+                    Mining State: <span class="status-badge">{{ status }}</span>
                 </div>
             </div>
 
-            <!-- Форма выбора каналов из подписок -->
+            <!-- Форма каналов -->
             <div class="group-box">
                 <div class="group-title">Select Followed Channels for Farming</div>
                 <form action="/start_miner" method="POST">
                     <p style="color: var(--steam-text-muted); margin: 0 0 8px 0;">
-                        Channels retrieved from your Twitch followings. Check the channels you want to farm:
+                        Twitch follows (отметь нужные каналы для фарма баллов и Drops):
                     </p>
 
                     <div class="channels-grid">
@@ -167,18 +185,23 @@
                             {{ ch }}
                         </label>
                         {% else %}
-                        <div style="grid-column: 1 / -1; color: var(--steam-text-muted);">
-                            No followed channels detected or followings are private. You can add one manually below.
+                        <div style="grid-column: 1 / -1; color: var(--steam-text-muted); padding: 8px;">
+                            Подписки не найдены или список пуст. Добавь стримера вручную ниже:
                         </div>
                         {% endfor %}
                     </div>
 
                     <div style="margin-top: 10px; display: flex; gap: 8px; align-items: center;">
-                        <label>Add custom streamer:</label>
-                        <input type="text" name="custom_channel" placeholder="e.g. shroud" style="width: 180px;">
+                        <label>Добавить вручную:</label>
+                        <input type="text" name="custom_channel" placeholder="например: shroud" style="width: 180px;">
                     </div>
 
-                    <div style="margin-top: 14px; text-align: right;">
+                    <div style="margin-top: 14px; display: flex; justify-content: space-between; align-items: center;">
+                        {% if is_running %}
+                        <button type="button" class="steam-btn danger" onclick="fetch('/stop_miner', {method: 'POST'}).then(() => location.reload())">Stop Mining</button>
+                        {% else %}
+                        <div></div>
+                        {% endif %}
                         <button type="submit" class="steam-btn">Save & Start Mining</button>
                     </div>
                 </form>
@@ -186,7 +209,7 @@
         </div>
 
         <div class="status-bar">
-            <span>Logged in as: <b>{{ username }}</b></span>
+            <span>Account: <b>{{ username }}</b></span>
             <span>Network: OK (Connected to Twitch)</span>
         </div>
     </div>
