@@ -2,211 +2,140 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>TTV Farm Station - Dashboard</title>
+    <title>Steam Monitor / Twitch Miner</title>
     <style>
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: #121212;
-            color: #e0e0e0;
+            background-color: #2b3925;
+            color: #d1d7bd;
+            font-family: Tahoma, Arial, sans-serif;
+            font-size: 11px;
             margin: 0;
-            padding: 20px;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: #1e1e1e;
-            padding: 25px;
-            border-radius: 8px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
-        }
-        .header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            border-bottom: 1px solid #333;
-            padding-bottom: 15px;
-            margin-bottom: 20px;
-        }
-        .user-info {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        .user-info img {
-            width: 45px;
-            height: 45px;
-            border-radius: 50%;
-            border: 2px solid #9146FF;
-        }
-        .status-box {
-            background: #2a2a2a;
-            padding: 12px 15px;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .add-form {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-        }
-        .add-form input {
-            flex: 1;
-            padding: 10px 12px;
-            background: #2a2a2a;
-            border: 1px solid #444;
-            color: #fff;
-            border-radius: 4px;
-            font-size: 14px;
-        }
-        .add-form button {
-            padding: 10px 20px;
-            background: #9146FF;
-            color: #fff;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-        }
-        .add-form button:hover {
-            background: #772ce8;
-        }
-        .channels-container {
-            max-height: 350px;
-            overflow-y: auto;
-            border: 1px solid #333;
-            border-radius: 6px;
             padding: 10px;
-            background: #181818;
-            margin-bottom: 20px;
         }
-        .channel-item {
+        .window {
+            background: #3c4d33;
+            border: 2px solid #556b47;
+            border-top: 2px solid #6b855c;
+            border-left: 2px solid #6b855c;
+            width: 750px;
+            margin: 20px auto;
+            box-shadow: 3px 3px 10px rgba(0,0,0,0.6);
+        }
+        .title-bar {
+            background: linear-gradient(to bottom, #5d784e 0%, #3c4d33 100%);
+            color: #ffffff;
+            padding: 4px 8px;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #232d1e;
+        }
+        .content {
+            padding: 12px;
+        }
+        .panel {
+            background: #232d1e;
+            border: 1px solid #1a2216;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        input[type="text"] {
+            background: #1a2216;
+            border: 1px solid #4a613d;
+            color: #d1d7bd;
+            padding: 4px;
+            font-family: Tahoma, Arial, sans-serif;
+            font-size: 11px;
+        }
+        button {
+            background: linear-gradient(to bottom, #4a613d 0%, #2f3e26 100%);
+            border: 1px solid #6b855c;
+            color: #ffffff;
+            padding: 4px 12px;
+            font-family: Tahoma, Arial, sans-serif;
+            font-size: 11px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: linear-gradient(to bottom, #567347 0%, #36492c 100%);
+        }
+        .btn-danger {
+            background: linear-gradient(to bottom, #7a3a3a 0%, #472121 100%);
+            border: 1px solid #a85252;
+        }
+        .btn-danger:hover {
+            background: linear-gradient(to bottom, #944444 0%, #5e2b2b 100%);
+        }
+        .channel-row {
             display: flex;
             align-items: center;
-            padding: 8px 10px;
-            border-bottom: 1px solid #2a2a2a;
-            gap: 12px;
-        }
-        .channel-item:last-child {
-            border-bottom: none;
-        }
-        .channel-item img {
-            width: 35px;
-            height: 35px;
-            border-radius: 50%;
-        }
-        .channel-item label {
-            flex: 1;
-            cursor: pointer;
-            font-size: 15px;
-        }
-        .btn-delete {
-            background: #eb0400;
-            color: white;
-            border: none;
-            padding: 5px 10px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-        }
-        .btn-delete:hover {
-            background: #c20300;
-        }
-        .actions {
-            display: flex;
+            padding: 4px 0;
+            border-bottom: 1px dashed #33422b;
             gap: 10px;
         }
-        .btn-start {
-            background: #008000;
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 14px;
+        .channel-row img {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            border: 1px solid #556b47;
         }
-        .btn-start:hover {
-            background: #006600;
-        }
-        .btn-stop {
-            background: #b30000;
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 14px;
-        }
-        .btn-stop:hover {
-            background: #990000;
-        }
-        .logout-link {
-            color: #ff5555;
+        a {
+            color: #92b579;
             text-decoration: none;
-            font-size: 14px;
         }
-        .logout-link:hover {
+        a:hover {
             text-decoration: underline;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <div class="user-info">
-                <img src="{{ avatar_url }}" alt="Avatar">
-                <div>
-                    <h3 style="margin: 0;">{{ display_name }}</h3>
-                    <span style="color: #888; font-size: 13px;">@{{ username }}</span>
-                </div>
-            </div>
-            <a href="/logout" class="logout-link">[ Выйти ]</a>
+    <div class="window">
+        <div class="title-bar">
+            <span>Steam Monitor - Twitch Points Miner [{{ display_name }}]</span>
+            <a href="/logout" style="color: #ff9999;">log out</a>
         </div>
-
-        <div class="status-box">
-            <span>Статус фарминга: <b>{{ status }}</b></span>
-            {% if is_running %}
-            <form action="/stop_miner" method="POST" style="margin: 0;">
-                <button type="submit" class="btn-stop">Остановить майнер</button>
-            </form>
-            {% endif %}
-        </div>
-
-        <h3>Управление каналами для фарма</h3>
-        
-        <!-- Форма добавления канала -->
-        <form action="/add_channel" method="POST" class="add-form">
-            <input type="text" name="new_channel" placeholder="Введите ник стримера (например, shroud)" autocomplete="off" required>
-            <button type="submit">Добавить</button>
-        </form>
-
-        <!-- Список каналов -->
-        <form action="/start_miner" method="POST">
-            <div class="channels-container">
-                {% if streamers %}
-                    {% for s in streamers %}
-                    <div class="channel-item">
-                        <input type="checkbox" name="channels" value="{{ s.login }}" id="ch_{{ s.login }}" {% if s.login in selected_channels %}checked{% endif %}>
-                        <img src="{{ s.avatar }}" alt="Streamer Avatar">
-                        <label for="ch_{{ s.login }}"><b>{{ s.name }}</b></label>
-                        <button type="submit" formaction="/remove_channel" name="channel" value="{{ s.login }}" class="btn-delete">Удалить</button>
-                    </div>
-                    {% endfor %}
-                {% else %}
-                    <div style="text-align: center; color: #777; padding: 20px;">
-                        Список каналов пуст. Добавьте первый канал выше!
-                    </div>
+        <div class="content">
+            
+            <div class="panel">
+                <b>Статус фарминга:</b> <span style="color: #a3d977;">{{ status }}</span>
+                {% if is_running %}
+                <form action="/stop_miner" method="POST" style="display:inline; margin-left: 15px;">
+                    <button type="submit" class="btn-danger">Остановить</button>
+                </form>
                 {% endif %}
             </div>
 
-            <div class="actions">
-                <button type="submit" class="btn-start">Сохранить и запустить фарминг</button>
+            <div class="panel">
+                <b>Добавить канал вручную:</b>
+                <form action="/add_channel" method="POST" style="margin-top: 5px; display: flex; gap: 5px;">
+                    <input type="text" name="new_channel" placeholder="например: shroud" style="flex:1;" required>
+                    <button type="submit">Добавить</button>
+                </form>
             </div>
-        </form>
+
+            <div class="panel">
+                <b>Список каналов для фарма:</b>
+                <form action="/start_miner" method="POST">
+                    <div style="max-height: 200px; overflow-y: auto; margin: 8px 0; padding-right: 5px;">
+                        {% if streamers %}
+                            {% for s in streamers %}
+                            <div class="channel-row">
+                                <input type="checkbox" name="channels" value="{{ s.login }}" id="ch_{{ s.login }}" {% if s.login in selected_channels %}checked{% endif %}>
+                                <img src="{{ s.avatar }}" alt="">
+                                <label for="ch_{{ s.login }}" style="flex:1; cursor:pointer;"><b>{{ s.name }}</b></label>
+                                <button type="submit" formaction="/remove_channel" name="channel" value="{{ s.login }}" class="btn-danger" style="padding: 2px 6px;">Удалить</button>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <div style="color: #888; text-align: center; padding: 10px;">Каналы не добавлены. Введите ник выше.</div>
+                        {% endif %}
+                    </div>
+                    <button type="submit" style="width: 100%; padding: 6px; font-weight: bold; background: linear-gradient(to bottom, #557a3d 0%, #314723 100%);">Сохранить и запустить фарминг</button>
+                </form>
+            </div>
+
+        </div>
     </div>
 </body>
 </html>
