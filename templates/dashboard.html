@@ -16,7 +16,7 @@
             --steam-text-muted: #8d9885;
             --steam-accent: #a3b899;
             --steam-green: #68b248;
-            --steam-yellow: #d8c358;
+            --steam-yellow: #f5d442;
             --steam-red: #c95252;
         }
 
@@ -104,9 +104,6 @@
             color: var(--steam-text-bright);
             text-decoration: underline;
         }
-        .menu-item:hover {
-            color: var(--steam-text-bright);
-        }
 
         .content-area {
             padding: 12px;
@@ -136,20 +133,39 @@
             justify-content: space-between;
         }
 
-        .activation-box {
-            background: #38351c;
-            border: 1px solid var(--steam-yellow);
-            color: #fff;
-            padding: 12px;
-            margin-bottom: 14px;
+        /* Баннер подтверждения Twitch TV */
+        .activation-card {
+            display: none;
+            background: #2b2a1a;
+            border: 2px solid var(--steam-yellow);
+            padding: 14px;
             text-align: center;
+            margin-bottom: 12px;
+            animation: pulse-border 1.5s infinite alternate;
         }
-        .activation-code {
-            font-size: 24px;
+
+        @keyframes pulse-border {
+            0% { box-shadow: 0 0 4px var(--steam-yellow); }
+            100% { box-shadow: 0 0 14px var(--steam-yellow); }
+        }
+
+        .activation-title {
             font-weight: bold;
-            letter-spacing: 4px;
+            font-size: 13px;
             color: var(--steam-yellow);
-            margin: 8px 0;
+            text-transform: uppercase;
+        }
+
+        .activation-code-text {
+            font-size: 28px;
+            font-weight: bold;
+            letter-spacing: 6px;
+            color: #ffffff;
+            background: #1a1e16;
+            padding: 6px 16px;
+            display: inline-block;
+            margin: 10px 0;
+            border: 1px solid var(--steam-border-hi);
             user-select: text;
         }
 
@@ -163,10 +179,6 @@
             font-family: inherit;
             font-size: 11px;
             outline: none;
-        }
-
-        input[type="text"]:focus {
-            border-color: var(--steam-accent);
         }
 
         .steam-btn {
@@ -185,11 +197,7 @@
             box-shadow: 1px 1px 0px #000;
         }
 
-        .steam-btn:hover {
-            background-color: var(--steam-light);
-            color: #fff;
-        }
-
+        .steam-btn:hover { background-color: var(--steam-light); color: #fff; }
         .steam-btn:active {
             border-top: 1px solid var(--steam-border-lo);
             border-left: 1px solid var(--steam-border-lo);
@@ -201,9 +209,6 @@
         .steam-btn.danger {
             background-color: #553434;
             border-color: #7b4c4c #2b1717 #2b1717 #7b4c4c;
-        }
-        .steam-btn.danger:hover {
-            background-color: #6b4040;
         }
 
         .streamers-list {
@@ -220,10 +225,6 @@
             padding: 4px 6px;
             border-bottom: 1px solid #333a2e;
             gap: 10px;
-        }
-
-        .streamer-row:last-child {
-            border-bottom: none;
         }
 
         .streamer-row img {
@@ -279,29 +280,28 @@
 
         <div class="content-area">
             
-            {% if auth_code %}
-            <!-- Блок с кодом для авторизации через Twitch TV Flow -->
-            <div class="activation-box">
-                <div style="font-weight: bold; font-size: 13px;">ТРЕБУЕТСЯ ПОДТВЕРЖДЕНИЕ ВХОДА</div>
-                <div style="margin-top: 4px;">
-                    Перейдите по ссылке: <a href="https://www.twitch.tv/activate" target="_blank" style="color: #68b248; font-weight: bold;">https://www.twitch.tv/activate</a>
+            <!-- Окно активации кода (показывается мгновенно скриптом) -->
+            <div id="activationBox" class="activation-card">
+                <div class="activation-title">⚠️ ТРЕБУЕТСЯ ПОДТВЕРЖДЕНИЕ ВХОДА TWITCH</div>
+                <div style="margin-top: 6px; font-size: 12px;">
+                    Перейдите на страницу: 
+                    <a href="https://www.twitch.tv/activate" id="activateLink" target="_blank" style="color: var(--steam-green); font-weight: bold; text-decoration: underline;">
+                        https://www.twitch.tv/activate
+                    </a>
                 </div>
-                <div class="activation-code">{{ auth_code }}</div>
-                <div style="font-size: 10px; color: var(--steam-text-muted);">
-                    Введите этот код на сайте Twitch. Страница обновится автоматически после подтверждения.
+                <div>
+                    <div id="activationCode" class="activation-code-text">...</div>
+                </div>
+                <div>
+                    <button type="button" class="steam-btn" onclick="openAndCopy()">Скопировать код и открыть Twitch</button>
                 </div>
             </div>
-            <script>
-                // Автообновление раз в 5 секунд, пока висит код
-                setTimeout(() => { window.location.reload(); }, 5000);
-            </script>
-            {% endif %}
 
             <div class="group-box">
                 <div class="group-title">Miner State & Actions</div>
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
-                        Current Mining State: <span class="status-badge">{{ status }}</span>
+                        Current Mining State: <span id="currentStatus" class="status-badge">{{ status }}</span>
                     </div>
                     <div>
                         {% if is_running %}
@@ -352,5 +352,48 @@
         </div>
     </div>
 
+    <script>
+        let currentAuthCode = null;
+        let autoOpened = false;
+
+        function openAndCopy() {
+            if (currentAuthCode) {
+                navigator.clipboard.writeText(currentAuthCode);
+            }
+            window.open("https://www.twitch.tv/activate", "_blank");
+        }
+
+        // Авто-опрос бэкенда каждую секунду
+        setInterval(async () => {
+            try {
+                const res = await fetch('/api/check_status');
+                const data = await res.json();
+                
+                if (data.status) {
+                    document.getElementById('currentStatus').innerText = data.status;
+                }
+
+                const box = document.getElementById('activationBox');
+                if (data.auth_code) {
+                    currentAuthCode = data.auth_code;
+                    document.getElementById('activationCode').innerText = data.auth_code;
+                    box.style.display = 'block';
+
+                    // Автоматически открываем окно один раз
+                    if (!autoOpened) {
+                        autoOpened = true;
+                        window.open("https://www.twitch.tv/activate", "_blank");
+                    }
+                } else {
+                    box.style.display = 'none';
+                    if (data.status === "В сети (Фарминг)") {
+                        autoOpened = false;
+                    }
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }, 1000);
+    </script>
 </body>
 </html>
