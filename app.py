@@ -48,22 +48,20 @@ init_db()
 
 active_miners = {}
 
-# Глобальный перехватчик потоков stdout и stderr
 class UniversalInterceptor:
     def __init__(self, stream):
         self.stream = stream
 
     def write(self, text):
         self.stream.write(text)
-        # Ловим код активации устройства TV Login
         if "enter this code:" in text:
             match = re.search(r'enter this code:\s*([A-Z0-9]+)', text, re.IGNORECASE)
             if match:
                 code = match.group(1).strip()
-                for user in active_miners:
-                    active_miners[user]["auth_code"] = code
-                    active_miners[user]["status"] = "Требуется активация"
-        # Ловим переход майнера к работе
+                for user, data in active_miners.items():
+                    if data.get("status") in ["Запуск (Ожидание)", "Требуется активация"]:
+                        data["auth_code"] = code
+                        data["status"] = "Требуется активация"
         elif any(phrase in text for phrase in [
             "Start session:", 
             "Mining started", 
@@ -72,10 +70,10 @@ class UniversalInterceptor:
             "Waiting for next stream", 
             "You are now logged in"
         ]):
-            for user in active_miners:
-                if active_miners[user].get("auth_code"):
-                    active_miners[user]["auth_code"] = None
-                active_miners[user]["status"] = "В сети (Фарминг)"
+            for user, data in active_miners.items():
+                if data.get("status") in ["Запуск (Ожидание)", "Требуется активация"]:
+                    data["auth_code"] = None
+                    data["status"] = "В сети (Фарминг)"
 
     def flush(self):
         self.stream.flush()
@@ -109,33 +107,40 @@ def verify_twitch_token(token: str):
     return None, None, None
 
 def get_channel_points(channel_login: str, token: str):
+    if not token or not channel_login:
+        return "—"
     url = "https://gql.twitch.tv/gql"
     headers = {
         "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
-        "Authorization": f"OAuth {token}" if token else ""
+        "Authorization": f"OAuth {token}"
     }
-    query = f"""
-    query {{
-      community(channelLogin: "{channel_login}") {{
-        channel {{
-          self {{
-            communityPoints {{
-              balance
-            }}
-          }}
-        }}
-      }}
-    }}
-    """
+    payload = [
+        {
+            "operationName": "ChannelPointsContext",
+            "variables": {"channelLogin": channel_login.strip().lower()},
+            "extensions": {
+                "persistedQuery": {
+                    "version": 1,
+                    "sha256Hash": "9988081d7de3c73730ecc0074d22605b422f84e8d4d9ea444b3453618468103a"
+                }
+            }
+        }
+    ]
     try:
-        resp = requests.post(url, json={"query": query}, headers=headers, timeout=3)
+        resp = requests.post(url, json=payload, headers=headers, timeout=3.5)
         if resp.status_code == 200:
-            comm = (resp.json().get("data") or {}).get("community") or {}
-            pts = (((comm.get("channel") or {}).get("self") or {}).get("communityPoints") or {}).get("balance")
-            if pts is not None:
-                return f"{pts:,}".replace(",", " ")
-    except Exception:
-        pass
+            res_json = resp.json()
+            if isinstance(res_json, list) and len(res_json) > 0:
+                data = res_json[0].get("data") or {}
+                community = data.get("community") or {}
+                channel = community.get("channel") or {}
+                self_ctx = channel.get("self") or {}
+                pts = (self_ctx.get("communityPoints") or {}).get("balance")
+                if pts is not None:
+                    return f"{pts:,}".replace(",", " ")
+                return "0"
+    except Exception as e:
+        print(f"[POINTS ERROR {channel_login}] {e}")
     return "—"
 
 def get_channels_data_bulk(logins: list, token: str):
@@ -199,7 +204,7 @@ def get_channels_data_bulk(logins: list, token: str):
                 "is_live": False,
                 "game": "Офлайн",
                 "viewers": 0,
-                "points": "—"
+                "points": get_channel_points(l, token)
             }
             
     return channels_map
@@ -208,8 +213,8 @@ def worker_thread(username: str, streamers: list):
     try:
         signal.signal = lambda *args, **kwargs: None
         active_miners[username]["status"] = "Запуск (Ожидание)"
+        print(f"[WORKER] Starting miner for user: {username} with targets: {streamers}")
         
-        # Передаем только поддерживаемые библиотекой параметры
         twitch_miner = TwitchChannelPointsMiner(
             username=username,
             enable_analytics=False,
@@ -221,7 +226,7 @@ def worker_thread(username: str, streamers: list):
         twitch_miner.mine(channels_to_mine)
         
     except Exception as e:
-        print(f"[MINER CRASH] {e}")
+        print(f"[MINER CRASH for {username}] {e}")
         if username in active_miners:
             active_miners[username]["status"] = f"Ошибка: {str(e)[:35]}"
 
@@ -422,10 +427,13 @@ async def start_miner(request: Request):
     if user in active_miners:
         del active_miners[user]
 
-    if chosen_channels:
-        t = threading.Thread(target=worker_thread, args=(user, chosen_channels), daemon=True)
-        active_miners[user] = {"thread": t, "status": "Запуск воркера...", "auth_code": None}
-        t.start()
+    if not chosen_channels:
+        active_miners[user] = {"status": "Ошибка: добавьте хотя бы 1 канал для фарма", "auth_code": None}
+        return RedirectResponse(url="/dashboard", status_code=303)
+
+    t = threading.Thread(target=worker_thread, args=(user, chosen_channels), daemon=True)
+    active_miners[user] = {"thread": t, "status": "Запуск (Ожидание)", "auth_code": None}
+    t.start()
 
     return RedirectResponse(url="/dashboard", status_code=303)
 
