@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Steam — TTV Farm Monitor</title>
+    <style>
+        :root {
+            --steam-bg: #4c5844;
+            --steam-dark: #3a4334;
+            --steam-darker: #282e24;
+            --steam-light: #5e6d54;
+            --steam-border-hi: #6d7f62;
+            --steam-border-lo: #272d22;
+            --steam-text: #c4cebe;
+            --steam-text-bright: #e1e9db;
+            --steam-text-muted: #8d9885;
+            --steam-green: #68b248;
+        }
+        * { box-sizing: border-box; user-select: none; }
+        body {
+            font-family: "Tahoma", "Segoe UI", Arial, sans-serif;
+            background-color: #1f231c;
+            color: var(--steam-text);
+            margin: 0;
+            padding: 24px;
+            font-size: 11px;
+        }
+        .steam-window {
+            max-width: 820px;
+            margin: 0 auto;
+            background-color: var(--steam-bg);
+            border: 1px solid var(--steam-border-hi);
+            box-shadow: 2px 2px 0px var(--steam-border-lo), inset 1px 1px 0px var(--steam-light);
+            padding: 2px;
+        }
+        .title-bar {
+            background: linear-gradient(to right, #434e3c, #3a4434);
+            padding: 5px 8px;
+            display: flex;
+            justify-content: space-between;
+            color: var(--steam-text-bright);
+            font-weight: bold;
+            border-bottom: 1px solid var(--steam-border-lo);
+        }
+        .menu-bar {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 12px;
+            background-color: var(--steam-dark);
+            border-bottom: 1px solid var(--steam-border-lo);
+        }
+        .menu-left { display: flex; gap: 14px; }
+        .menu-item { cursor: pointer; color: var(--steam-text-muted); }
+        .menu-item.active { color: var(--steam-text-bright); text-decoration: underline; }
+        .content { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+        .group-box {
+            background-color: var(--steam-dark);
+            border: 1px solid var(--steam-border-lo);
+            box-shadow: inset 1px 1px 0px var(--steam-border-lo), 1px 1px 0px var(--steam-light);
+            padding: 12px;
+        }
+        .group-title {
+            color: var(--steam-text-bright);
+            font-weight: bold;
+            margin-bottom: 8px;
+            border-bottom: 1px solid #4a5643;
+            padding-bottom: 4px;
+            text-transform: uppercase;
+        }
+        .channels-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+            max-height: 250px;
+            overflow-y: auto;
+            background-color: var(--steam-darker);
+            padding: 8px;
+            border: 1px solid var(--steam-border-lo);
+        }
+        .channel-label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--steam-text);
+            cursor: pointer;
+        }
+        .channel-label:hover { color: #fff; }
+        input[type="text"] {
+            background-color: var(--steam-darker);
+            border: 1px solid var(--steam-border-lo);
+            color: #fff;
+            padding: 5px 8px;
+            font-size: 11px;
+            outline: none;
+        }
+        .steam-btn {
+            background-color: var(--steam-bg);
+            border-top: 1px solid var(--steam-border-hi);
+            border-left: 1px solid var(--steam-border-hi);
+            border-right: 1px solid var(--steam-border-lo);
+            border-bottom: 1px solid var(--steam-border-lo);
+            color: var(--steam-text-bright);
+            padding: 6px 14px;
+            font-weight: bold;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .steam-btn:hover { background-color: var(--steam-light); }
+        .steam-btn.danger { color: #ff8e8e; }
+        .status-badge { color: var(--steam-green); font-weight: bold; }
+        .status-bar {
+            background-color: var(--steam-dark);
+            padding: 4px 8px;
+            color: var(--steam-text-muted);
+            border-top: 1px solid var(--steam-border-lo);
+            display: flex;
+            justify-content: space-between;
+        }
+    </style>
+</head>
+<body>
+    <div class="steam-window">
+        <div class="title-bar">
+            <span>[Steam v1.0] TTV Farm Station — Account: {{ username }}</span>
+            <span>✕</span>
+        </div>
+        <div class="menu-bar">
+            <div class="menu-left">
+                <span class="menu-item active">Channels & Follows</span>
+                <span class="menu-item">Drops Inventory</span>
+                <span class="menu-item">Settings</span>
+            </div>
+            <div>
+                <a href="/logout" style="color: var(--steam-text-muted); text-decoration: none;">[Log Out]</a>
+            </div>
+        </div>
+
+        <div class="content">
+            <!-- Статус фарма -->
+            <div class="group-box">
+                <div class="group-title">Miner Status</div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>Current state: <span class="status-badge">{{ status }}</span></div>
+                    <div>
+                        {% if is_running %}
+                        <form action="/stop_miner" method="POST" style="display:inline;">
+                            <button type="submit" class="steam-btn danger">Stop Mining</button>
+                        </form>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Форма выбора каналов из подписок -->
+            <div class="group-box">
+                <div class="group-title">Select Followed Channels for Farming</div>
+                <form action="/start_miner" method="POST">
+                    <p style="color: var(--steam-text-muted); margin: 0 0 8px 0;">
+                        Channels retrieved from your Twitch followings. Check the channels you want to farm:
+                    </p>
+
+                    <div class="channels-grid">
+                        {% for ch in channels %}
+                        <label class="channel-label">
+                            <input type="checkbox" name="channels" value="{{ ch }}" {% if ch in selected_channels %}checked{% endif %}>
+                            {{ ch }}
+                        </label>
+                        {% else %}
+                        <div style="grid-column: 1 / -1; color: var(--steam-text-muted);">
+                            No followed channels detected or followings are private. You can add one manually below.
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <div style="margin-top: 10px; display: flex; gap: 8px; align-items: center;">
+                        <label>Add custom streamer:</label>
+                        <input type="text" name="custom_channel" placeholder="e.g. shroud" style="width: 180px;">
+                    </div>
+
+                    <div style="margin-top: 14px; text-align: right;">
+                        <button type="submit" class="steam-btn">Save & Start Mining</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="status-bar">
+            <span>Logged in as: <b>{{ username }}</b></span>
+            <span>Network: OK (Connected to Twitch)</span>
+        </div>
+    </div>
+</body>
+</html>
