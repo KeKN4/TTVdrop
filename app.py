@@ -1,22 +1,21 @@
 import os
-import re
 import sys
+import json
+import subprocess
 import secrets
 import sqlite3
-import threading
-import signal
 import requests
 from fastapi import FastAPI, Request, Form, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 import uvicorn
 
-from TwitchChannelPointsMiner import TwitchChannelPointsMiner
-
 app = FastAPI(title="TTV Drop Multi-User")
 templates = Jinja2Templates(directory="templates")
 
 DB_PATH = "storage.db"
+USER_DATA_DIR = "users_data"
+os.makedirs(USER_DATA_DIR, exist_ok=True)
 
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
@@ -46,49 +45,8 @@ def init_db():
 
 init_db()
 
-active_miners = {}
-
-# Глобальный перехватчик потоков stdout и stderr
-class UniversalInterceptor:
-    def __init__(self, stream):
-        self.stream = stream
-
-    def write(self, text):
-        self.stream.write(text)
-        # Ловим код активации устройства TV Login
-        if "enter this code:" in text:
-            match = re.search(r'enter this code:\s*([A-Z0-9]+)', text, re.IGNORECASE)
-            if match:
-                code = match.group(1).strip()
-                for user, data in active_miners.items():
-                    if data.get("status") in ["Запуск (Ожидание)", "Требуется активация"]:
-                        data["auth_code"] = code
-                        data["status"] = "Требуется активация"
-        # Ловим переход майнера к работе
-        elif any(phrase in text for phrase in [
-            "Start session:", 
-            "Mining started", 
-            "Looking for", 
-            "Loaded streamer", 
-            "Waiting for next stream", 
-            "You are now logged in"
-        ]):
-            for user, data in active_miners.items():
-                if data.get("status") in ["Запуск (Ожидание)", "Требуется активация"]:
-                    data["auth_code"] = None
-                    data["status"] = "В сети (Фарминг)"
-
-    def flush(self):
-        self.stream.flush()
-
-    def isatty(self):
-        return hasattr(self.stream, "isatty") and self.stream.isatty()
-
-    def __getattr__(self, name):
-        return getattr(self.stream, name)
-
-sys.stdout = UniversalInterceptor(sys.stdout)
-sys.stderr = UniversalInterceptor(sys.stderr)
+# Храним запущенные процессы: { username: subprocess.Popen }
+active_processes = {}
 
 def verify_twitch_token(token: str):
     url = "https://gql.twitch.tv/gql"
@@ -211,27 +169,6 @@ def get_channels_data_bulk(logins: list, token: str):
             
     return channels_map
 
-def worker_thread(username: str, streamers: list):
-    try:
-        signal.signal = lambda *args, **kwargs: None
-        active_miners[username]["status"] = "Запуск (Ожидание)"
-        print(f"[WORKER] Starting miner for user: {username} with targets: {streamers}")
-        
-        twitch_miner = TwitchChannelPointsMiner(
-            username=username,
-            enable_analytics=False,
-            disable_ssl_cert_verification=True
-        )
-
-        active_miners[username]["miner"] = twitch_miner
-        channels_to_mine = [s.strip().lower() for s in streamers if s.strip()]
-        twitch_miner.mine(channels_to_mine)
-        
-    except Exception as e:
-        print(f"[MINER CRASH for {username}] {e}")
-        if username in active_miners:
-            active_miners[username]["status"] = f"Ошибка: {str(e)[:35]}"
-
 def get_current_user_info(request: Request):
     token = request.cookies.get("steam_session")
     if not token:
@@ -326,14 +263,13 @@ async def dashboard(request: Request):
                 "points": info.get("points", "0")
             })
 
-    user_miner_data = active_miners.get(user, {})
-    status = user_miner_data.get("status", "Остановлен")
-    auth_code = user_miner_data.get("auth_code", None)
-    is_running = user in active_miners and "miner" in active_miners[user]
+    proc = active_processes.get(user)
+    is_running = proc is not None and proc.poll() is None
+    status = "В сети (Фарминг)" if is_running else "Остановлен"
 
     return templates.TemplateResponse(
-        request=request,
-        name="dashboard.html",
+        request=request, 
+        name="dashboard.html", 
         context={
             "username": user,
             "display_name": display_name or user,
@@ -341,7 +277,7 @@ async def dashboard(request: Request):
             "streamers": streamers,
             "selected_channels": saved_streamers,
             "status": status,
-            "auth_code": auth_code,
+            "auth_code": None,
             "is_running": is_running,
             "auto_claim_drops": auto_claim_drops
         }
@@ -351,12 +287,16 @@ async def dashboard(request: Request):
 async def check_status(request: Request):
     user, _, _ = get_current_user_info(request)
     if not user:
-        return JSONResponse({"status": "unauthorized", "auth_code": None})
-    user_miner = active_miners.get(user, {})
+        return JSONResponse({"status": "unauthorized", "auth_code": None, "is_running": False})
+
+    proc = active_processes.get(user)
+    is_running = proc is not None and proc.poll() is None
+    status = "В сети (Фарминг)" if is_running else "Остановлен"
+
     return JSONResponse({
-        "status": user_miner.get("status", "Остановлен"),
-        "auth_code": user_miner.get("auth_code", None),
-        "is_running": user in active_miners and "miner" in active_miners[user]
+        "status": status,
+        "auth_code": None,
+        "is_running": is_running
     })
 
 @app.post("/add_channel")
@@ -420,30 +360,45 @@ async def start_miner(request: Request):
     if not user:
         return RedirectResponse(url="/login")
 
+    # Если уже запущен — прибиваем старый
+    if user in active_processes and active_processes[user].poll() is None:
+        active_processes[user].terminate()
+
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT selected_streamers FROM users WHERE username = ?", (user,))
+        cursor.execute("SELECT selected_streamers, auth_token FROM users WHERE username = ?", (user,))
         row = cursor.fetchone()
         chosen_channels = [s.strip() for s in row[0].split(",")] if row and row[0] else []
+        auth_token = row[1] if row else ""
 
-    if user in active_miners:
-        del active_miners[user]
-
-    if not chosen_channels:
-        active_miners[user] = {"status": "Ошибка: добавьте хотя бы 1 канал для фарма", "auth_code": None}
+    if not chosen_channels or not auth_token:
         return RedirectResponse(url="/dashboard", status_code=303)
 
-    t = threading.Thread(target=worker_thread, args=(user, chosen_channels), daemon=True)
-    active_miners[user] = {"thread": t, "status": "Запуск (Ожидание)", "auth_code": None}
-    t.start()
+    # Изолированная папка под каждого пользователя
+    user_dir = os.path.join(USER_DATA_DIR, user)
+    os.makedirs(user_dir, exist_ok=True)
+
+    # Запуск изолированного процесса worker.py
+    cmd = [
+        sys.executable,
+        os.path.abspath("worker.py"),
+        user,
+        auth_token,
+        json.dumps(chosen_channels)
+    ]
+    proc = subprocess.Popen(cmd, cwd=user_dir)
+    active_processes[user] = proc
 
     return RedirectResponse(url="/dashboard", status_code=303)
 
 @app.post("/stop_miner")
 async def stop_miner(request: Request):
     user, _, _ = get_current_user_info(request)
-    if user and user in active_miners:
-        del active_miners[user]
+    if user and user in active_processes:
+        proc = active_processes[user]
+        if proc.poll() is None:
+            proc.terminate()
+        del active_processes[user]
     return RedirectResponse(url="/dashboard", status_code=303)
 
 if __name__ == "__main__":
